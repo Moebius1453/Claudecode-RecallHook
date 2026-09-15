@@ -645,11 +645,13 @@ def set_capture_offset(connection: sqlite3.Connection, source_path: str,
     )
 
 
-def canonical_cards(connection: sqlite3.Connection) -> list[tuple[int, str, str]]:
+def canonical_cards(connection: sqlite3.Connection) -> list[dict]:
     ""
-    return [tuple(row) for row in connection.execute(
-        "SELECT id, topic, summary FROM candidate_cards "
-        "WHERE duplicate_of IS NULL AND classification <> 'discard' ORDER BY id")]
+    return [dict(zip(("id", "topic", "summary", "card_vector"), row))
+            for row in connection.execute(
+                "SELECT id, topic, summary, card_vector FROM candidate_cards "
+                "WHERE duplicate_of IS NULL AND classification <> 'discard' "
+                "ORDER BY id")]
 
 
 def set_card_duplicate(connection: sqlite3.Connection, card_id: int,
@@ -661,10 +663,25 @@ def set_card_duplicate(connection: sqlite3.Connection, card_id: int,
 
 def all_card_rows(connection: sqlite3.Connection) -> list[dict]:
     ""
-    return [dict(zip(("id", "topic", "summary", "classification", "duplicate_of"), row))
+    return [dict(zip(("id", "topic", "summary", "classification", "duplicate_of",
+                      "card_vector"), row))
             for row in connection.execute(
-                "SELECT id, topic, summary, classification, duplicate_of "
+                "SELECT id, topic, summary, classification, duplicate_of, card_vector "
                 "FROM candidate_cards ORDER BY id")]
+
+
+def set_card_vector(connection: sqlite3.Connection, card_id: int, blob: bytes) -> None:
+    connection.execute("UPDATE candidate_cards SET card_vector=? WHERE id=?",
+                       (blob, card_id))
+
+
+def cards_needing_vector(connection: sqlite3.Connection) -> list[tuple[int, str]]:
+    ""
+    return [(int(row[0]), f"{row[1] or ''} {row[2] or ''}".strip())
+            for row in connection.execute(
+                "SELECT id, topic, summary FROM candidate_cards "
+                "WHERE card_vector IS NULL AND (topic <> '' OR summary <> '') "
+                "ORDER BY id")]
 
 
 def clear_card_duplicates(connection: sqlite3.Connection) -> int:

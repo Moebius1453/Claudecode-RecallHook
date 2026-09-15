@@ -6,7 +6,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from memlib import db, dedup, llm, store
+from memlib import db, dedup, embed, llm, store
+from memlib import vector as vec
 
 
 ROLE_LABEL = {"user": "用户", "assistant": "助手"}
@@ -78,22 +79,45 @@ def parse_reply(reply) -> tuple[str, dict | None, str]:
     return classification, data, ""
 
 
-def run(connection, config, client, *, limit_batches: int = 0,
+def run(connection, config, client, *, embedder=None, limit_batches: int = 0,
         dry_run: bool = False, log) -> dict:
     screen_cfg = config.get("screen", {})
     batch_turns = int(screen_cfg.get("batch_turns", 12))
     batch_max_chars = int(screen_cfg.get("batch_max_chars", 12000))
     max_retries = int(screen_cfg.get("max_retries", 3))
+    method = str(screen_cfg.get("dedup_method", "vector"))
+    vector_threshold = float(screen_cfg.get("dedup_vector_threshold", 0.68))
     topic_threshold = float(screen_cfg.get("dedup_topic_threshold", 0.30))
     full_threshold = float(screen_cfg.get("dedup_full_threshold", 0.10))
 
+    
+    if method == "vector" and (embedder is None or not getattr(embedder, "available", False)):
+        log(f"  [degrade] 嵌入不可用 → 去重降级到 2-gram"
+            f"（{getattr(embedder, 'reason', '未配置')}）")
+
+    def embed_card(topic: str, summary: str):
+        ""
+        if embedder is None or not getattr(embedder, "available", False):
+            return None
+        try:
+            return embedder.embed([dedup.embed_text(topic, summary)])[0]
+        except Exception as error:  
+            log(f"  [warn] 嵌入失败，这张卡降级到 2-gram：{error}")
+            return None
+
     stats = {"batches": 0, "turns": 0, "cards": 0, "discarded": 0, "duplicates": 0,
-             "failed": 0, "abandoned": 0, "empty": 0, "malformed": 0}
+             "failed": 0, "abandoned": 0, "empty": 0, "malformed": 0,
+             "vectors": 0, "degraded": 0}
 
     
     
-    known = [dedup.Card(id=i, topic=t, summary=s)
-             for i, t, s in store.canonical_cards(connection)]
+    known = []
+    for row in store.canonical_cards(connection):
+        blob = row.get("card_vector")
+        known.append(dedup.Card(
+            id=row["id"], topic=row["topic"] or "", summary=row["summary"] or "",
+            vector=vec.unpack(blob, embedder.dim)
+            if (blob and method == "vector" and embedder is not None) else None))
 
     pending = store.pending_turns(connection)
     if not pending:
@@ -146,18 +170,23 @@ def run(connection, config, client, *, limit_batches: int = 0,
             stats["discarded"] += 1
             log(f"  [discard] {len(batch)} 轮")
         else:
+            vector = embed_card(topic, summary)
             card_id = store.add_card(
                 connection, source_session=batch[0]["session_id"],
                 ts=batch[0].get("ts"), topic=topic, summary=summary,
                 snippet=batch[0]["text"][:500], why=why,
-                classification=classification)
+                classification=classification,
+                card_vector=vec.pack(vector) if vector is not None else None)
             store.mark_turns_screened(connection, ids, card_id)
             stats["cards"] += 1
+            stats["vectors" if vector is not None else "degraded"] += 1
 
             
-            candidate_card = dedup.Card(id=card_id, topic=topic, summary=summary)
-            dup_id, score, signal = dedup.find_duplicate(
-                candidate_card, known,
+            candidate_card = dedup.Card(id=card_id, topic=topic, summary=summary,
+                                        vector=vector)
+            dup_id, score, signal = dedup.find_duplicate_by(
+                method, candidate_card, known,
+                vector_threshold=vector_threshold,
                 topic_threshold=topic_threshold, full_threshold=full_threshold)
             if dup_id is not None:
                 store.set_card_duplicate(connection, card_id, dup_id)
@@ -203,8 +232,14 @@ def main() -> None:
         parser.exit(1, f"llama-server 没在跑（{client.endpoint}）。"
                        f"轮次会留在 turns 里等下次，不丢。\n启动见 08 §12。\n")
 
+    
+    embedder = embed.get_embedder(config, bulk=True)
+    if not embedder.available:
+        log(f"[degrade] 嵌入不可用（{embedder.reason}）→ 去重走 2-gram")
+
     try:
-        stats = run(connection, config, client, limit_batches=args.limit_batches,
+        stats = run(connection, config, client, embedder=embedder,
+                    limit_batches=args.limit_batches,
                     dry_run=args.dry_run, log=log)
     except Exception as error:  
         connection.rollback()
@@ -220,6 +255,8 @@ def main() -> None:
               f"discard {stats['discarded']}｜重复 {stats['duplicates']}｜失败 {stats['failed']}"
               f"（空回复 {stats['empty']} / 畸形 {stats['malformed']}）｜"
               f"放弃 {stats['abandoned']}"
+              + (f"｜有向量 {stats['vectors']}／降级 {stats['degraded']}"
+                 if stats["cards"] else "")
               + ("（dry-run 未调用模型）" if args.dry_run else ""))
 
 

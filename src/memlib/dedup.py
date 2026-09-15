@@ -33,6 +33,7 @@ class Card:
     id: int
     topic: str
     summary: str
+    vector: object = None          
 
     @property
     def topic_fp(self) -> frozenset[str]:
@@ -41,6 +42,41 @@ class Card:
     @property
     def full_fp(self) -> frozenset[str]:
         return fingerprint(self.topic, self.summary)
+
+
+def embed_text(topic: str, summary: str) -> str:
+    ""
+    return f"{topic or ''} {summary or ''}".strip()
+
+
+def cosine(left, right) -> float:
+    import numpy as np
+
+    left = np.asarray(left, dtype=np.float32).ravel()
+    right = np.asarray(right, dtype=np.float32).ravel()
+    denominator = float(np.linalg.norm(left)) * float(np.linalg.norm(right))
+    if denominator == 0.0:
+        return 0.0
+    return float(left @ right / denominator)
+
+
+def find_duplicate_vector(new: Card, existing: list[Card], *,
+                          threshold: float) -> tuple[int | None, float, str]:
+    ""
+    if new.vector is None:
+        return None, 0.0, "vector"
+    best_id, best_score = None, 0.0
+    raw = 0.0
+    for other in existing:
+        if other.vector is None:
+            continue
+        score = cosine(new.vector, other.vector)
+        if score > raw:
+            raw = score
+        if score >= threshold and score > best_score:
+            best_id, best_score = other.id, score
+    return best_id, raw, "vector"
+
 
 
 def find_duplicate(new: Card, existing: list[Card], *,
@@ -68,3 +104,19 @@ def find_duplicate(new: Card, existing: list[Card], *,
         if combined > best_score:
             best_id, best_score = other.id, combined
     return best_id, raw_score, raw_signal
+
+
+def find_duplicate_by(method: str, new: Card, existing: list[Card], *,
+                      vector_threshold: float = 0.68,
+                      topic_threshold: float = 0.30,
+                      full_threshold: float = 0.10
+                      ) -> tuple[int | None, float, str]:
+    ""
+    if method == "vector" and new.vector is not None:
+        return find_duplicate_vector(new, existing, threshold=vector_threshold)
+    if method == "vector":
+        found, score, _ = find_duplicate(new, existing, topic_threshold=topic_threshold,
+                                         full_threshold=full_threshold)
+        return found, score, "ngram(fallback)"
+    return find_duplicate(new, existing, topic_threshold=topic_threshold,
+                          full_threshold=full_threshold)
