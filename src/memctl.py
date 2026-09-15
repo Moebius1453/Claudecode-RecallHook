@@ -34,6 +34,9 @@ def cmd_status(connection, args) -> int:
           f"无向量 {info['files_no_vector']}｜"
           f"无触发词 {info['files_no_trigger']}｜"
           f"触发词 {info['triggers_total']} {info['triggers_by_source']}")
+    turns = info["turns"]
+    if turns["total"]:
+        print(f"轮次 待筛 {turns['new']}｜已筛 {turns['screened']}｜丢弃 {turns['discarded']}")
     print(f"待排水候选卡 {info['cards_new']}｜向量模型 {info['embed_model'] or '（未嵌入过）'}")
     return 0
 

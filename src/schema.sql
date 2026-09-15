@@ -78,6 +78,35 @@ CREATE TABLE capture_state (
     last_run TEXT
 );
 
+-- 轮次暂存（第 6 步 capture → screen 之间的缓冲）。
+--
+-- **刻意偏离 04 §0「不做：正文进 SQLite」**，理由见 08 §16-D26：
+-- 那条针对的是 md 正文这个"内容真相"；这里存的是从 jsonl 派生的、可随时
+-- 全量重建的中间态，且用户 规划.txt 明确要求 "sql 承担缓冲大量 token 的缓冲"。
+-- 真要回退：DROP TABLE turns + 重跑 capture，jsonl 是原始真相，不丢东西。
+CREATE TABLE turns (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL DEFAULT '',
+    source_path TEXT NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+    ts TEXT,
+    uuid TEXT,
+    text TEXT NOT NULL,
+    -- sha256(文本)。UNIQUE = 04 §3-③ 的"同一句话在多个会话重复出现"去重。
+    text_hash TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'new'
+        CHECK(status IN ('new','screened','discarded')),
+    -- 这批轮次被提炼成了哪张卡。可追溯"这张卡是从哪几句话来的"。
+    card_id INTEGER REFERENCES candidate_cards(id),
+    -- 送模型失败过几次。到上限就放弃并标 discarded —— 否则一批永远失败的对话
+    -- 会把水位线永久卡住（参考 livingmemory 的 pending_summary.retry_count）。
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+    fail_reason TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_turns_status ON turns(status, id);
+CREATE INDEX idx_turns_session ON turns(session_id, id);
+
 CREATE TABLE candidate_cards (
     id INTEGER PRIMARY KEY,
     source_session TEXT NOT NULL,
@@ -97,7 +126,7 @@ CREATE INDEX idx_cards_status ON candidate_cards(status);
 
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 INSERT INTO meta (key, value) VALUES
-    ('schema_version', '10'),
+    ('schema_version', '11'),
     ('warm_demotion_days', '90'),
     ('resting_demotion_days', '180'),
     ('promotion_window_days', '30'),

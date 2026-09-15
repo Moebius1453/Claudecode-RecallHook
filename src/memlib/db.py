@@ -9,7 +9,7 @@ MAIN_DIR = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schema.sql"
 DEFAULT_CONFIG_PATH = MAIN_DIR / "config.toml"
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 MIGRATIONS: dict[int, list[str]] = {
@@ -82,11 +82,32 @@ MIGRATIONS: dict[int, list[str]] = {
         "ALTER TABLE injection_log ADD COLUMN route_ranks TEXT",
         "CREATE INDEX idx_injlog_session ON injection_log(session_id, file_id)",
     ],
+    11: [
+        
+        """CREATE TABLE turns (
+            id INTEGER PRIMARY KEY,
+            session_id TEXT NOT NULL DEFAULT '',
+            source_path TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+            ts TEXT,
+            uuid TEXT,
+            text TEXT NOT NULL,
+            text_hash TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'new'
+                CHECK(status IN ('new','screened','discarded')),
+            card_id INTEGER REFERENCES candidate_cards(id),
+            attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+            fail_reason TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )""",
+        "CREATE INDEX idx_turns_status ON turns(status, id)",
+        "CREATE INDEX idx_turns_session ON turns(session_id, id)",
+    ],
 }
 
 REQUIRED_TABLES = {
     "files", "triggers", "see_also", "injection_log", "tier_events",
-    "capture_state", "candidate_cards", "meta", "files_fts", "cards_fts",
+    "capture_state", "candidate_cards", "meta", "files_fts", "cards_fts", "turns",
 }
 
 

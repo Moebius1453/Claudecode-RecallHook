@@ -505,6 +505,115 @@ def log_injection(connection: sqlite3.Connection, prompt_hash: str, file_id: int
 
 
 
+def insert_turn(connection: sqlite3.Connection, *, session_id: str, source_path: str,
+                role: str, ts: str, uuid: str, text: str,
+                text_hash: str) -> int | None:
+    ""
+    cursor = connection.execute(
+        "INSERT OR IGNORE INTO turns(session_id, source_path, role, ts, uuid, text, "
+        "text_hash) VALUES(?,?,?,?,?,?,?)",
+        (session_id, source_path, role, ts, uuid, text, text_hash),
+    )
+    return int(cursor.lastrowid) if cursor.rowcount else None
+
+
+def pending_turns(connection: sqlite3.Connection, limit: int = 0) -> list[dict]:
+    ""
+    sql = ("SELECT id, session_id, role, ts, text, attempts FROM turns "
+           "WHERE status='new' ORDER BY id")
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    return [dict(zip(("id", "session_id", "role", "ts", "text", "attempts"), row))
+            for row in connection.execute(sql)]
+
+
+def bump_turn_attempts(connection: sqlite3.Connection, turn_ids: list[int],
+                       reason: str) -> int:
+    ""
+    if not turn_ids:
+        return 0
+    marks = ",".join("?" for _ in turn_ids)
+    connection.execute(
+        f"UPDATE turns SET attempts=attempts+1, fail_reason=? WHERE id IN ({marks})",
+        [reason[:200], *turn_ids],
+    )
+    row = connection.execute(
+        f"SELECT MAX(attempts) FROM turns WHERE id IN ({marks})", turn_ids
+    ).fetchone()
+    return int(row[0] or 0)
+
+
+def mark_turns_screened(connection: sqlite3.Connection, turn_ids: list[int],
+                        card_id: int | None, status: str = "screened") -> int:
+    ""
+    if not turn_ids:
+        return 0
+    marks = ",".join("?" for _ in turn_ids)
+    cursor = connection.execute(
+        f"UPDATE turns SET status=?, card_id=?, attempts=0, fail_reason=NULL "
+        f"WHERE id IN ({marks})",
+        [status, card_id, *turn_ids],
+    )
+    return cursor.rowcount
+
+
+def abandon_turns(connection: sqlite3.Connection, turn_ids: list[int],
+                  reason: str) -> int:
+    ""
+    if not turn_ids:
+        return 0
+    marks = ",".join("?" for _ in turn_ids)
+    cursor = connection.execute(
+        f"UPDATE turns SET status='discarded', fail_reason=? WHERE id IN ({marks})",
+        [reason[:200], *turn_ids],
+    )
+    return cursor.rowcount
+
+
+def turn_counts(connection: sqlite3.Connection) -> dict:
+    counts = {row[0]: row[1] for row in
+              connection.execute("SELECT status, COUNT(*) FROM turns GROUP BY status")}
+    return {
+        "new": counts.get("new", 0),
+        "screened": counts.get("screened", 0),
+        "discarded": counts.get("discarded", 0),
+        "total": sum(counts.values()),
+    }
+
+
+def capture_offset(connection: sqlite3.Connection, source_path: str) -> int:
+    row = connection.execute(
+        "SELECT bytes_consumed FROM capture_state WHERE source_path=?", (source_path,)
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def set_capture_offset(connection: sqlite3.Connection, source_path: str,
+                       offset: int) -> None:
+    connection.execute(
+        "INSERT INTO capture_state(source_path, bytes_consumed, last_run) "
+        "VALUES(?,?, datetime('now')) "
+        "ON CONFLICT(source_path) DO UPDATE SET bytes_consumed=excluded.bytes_consumed, "
+        "last_run=excluded.last_run",
+        (source_path, int(offset)),
+    )
+
+
+def add_card(connection: sqlite3.Connection, *, source_session: str, ts: str | None,
+             topic: str, summary: str, snippet: str | None, why: str | None,
+             classification: str, source_kind: str = "text",
+             noise_flags: str = "[]", card_vector: bytes | None = None) -> int:
+    cursor = connection.execute(
+        "INSERT INTO candidate_cards(source_session, ts, topic, summary, snippet, why, "
+        "classification, source_kind, noise_flags, card_vector) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (source_session, ts, topic, summary, snippet, why, classification,
+         source_kind, noise_flags, card_vector),
+    )
+    return int(cursor.lastrowid)
+
+
+
+
 def status(connection: sqlite3.Connection) -> dict:
     def scalar(sql: str, params=()) -> int:
         return int(connection.execute(sql, params).fetchone()[0])
@@ -535,6 +644,7 @@ def status(connection: sqlite3.Connection) -> dict:
             )
         },
         "cards_new": scalar("SELECT COUNT(*) FROM candidate_cards WHERE status='new'"),
+        "turns": turn_counts(connection),
         "schema_version": get_meta(connection, "schema_version"),
         "embed_model": get_meta(connection, "embed_model"),
     }
