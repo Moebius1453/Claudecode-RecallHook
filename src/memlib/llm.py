@@ -35,8 +35,27 @@ class LlamaClient:
 
     def chat_json(self, prompt: str, *, max_tokens: int = 400) -> dict | None:
         ""
+        return self.chat_json_reply(prompt, max_tokens=max_tokens).data
+
+    def chat_json_reply(self, prompt: str, *, max_tokens: int = 400) -> "JsonReply":
         raw = self.chat(prompt, max_tokens=max_tokens)
-        return extract_json(raw)
+        data = extract_json(raw)
+        if data is not None:
+            return JsonReply("ok", data, raw)
+        return JsonReply("empty" if not raw.strip() else "malformed", None, raw)
+
+
+@dataclass(frozen=True)
+class JsonReply:
+    ""
+
+    kind: str          
+    data: dict | None
+    raw: str
+
+    @property
+    def ok(self) -> bool:
+        return self.kind == "ok"
 
 
 def extract_json(text: str) -> dict | None:

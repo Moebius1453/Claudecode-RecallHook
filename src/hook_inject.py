@@ -38,6 +38,14 @@ def extract_prompt(payload: dict, fallback: str | None) -> str:
     return ""
 
 
+def extract_session_id(payload: dict, fallback: str | None) -> str | None:
+    ""
+    if fallback:
+        return fallback
+    value = payload.get("session_id")
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def open_readonly(db_path: Path) -> sqlite3.Connection:
     ""
     connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.3)
@@ -47,7 +55,8 @@ def open_readonly(db_path: Path) -> sqlite3.Connection:
 
 
 def build_block(prompt: str, config: dict, connection: sqlite3.Connection,
-                *, use_embedder: bool, no_dedup: bool) -> tuple[str, list]:
+                *, use_embedder: bool, no_dedup: bool,
+                session_id: str | None = None) -> tuple[str, list]:
     embedder = None
     if use_embedder:
         from memlib import embed
@@ -59,7 +68,7 @@ def build_block(prompt: str, config: dict, connection: sqlite3.Connection,
     candidates = result.candidates
     if not no_dedup:
         window = int(store.get_meta(connection, "dedup_window_hours", "6"))
-        already = store.recently_injected(connection, window)
+        already = store.recently_injected(connection, window, session_id)
         candidates = [c for c in candidates if c.file_id not in already]
 
     block = render.render(candidates, config, connection)
@@ -94,6 +103,8 @@ def main() -> None:
     parser.add_argument("--raw", action="store_true", help="打印注入块本体而非 hook JSON")
     parser.add_argument("--no-embed", action="store_true", help="跳过向量阶段")
     parser.add_argument("--no-log", action="store_true", help="不写 injection_log（干跑必用）")
+    parser.add_argument("--session-id", default=None,
+                        help="干跑用：假装是这个会话，验会话级去重")
     parser.add_argument("--verbose", action="store_true", help="诊断信息走 stderr")
     args = parser.parse_args()
 
@@ -104,6 +115,7 @@ def main() -> None:
     try:
         payload = read_payload()
         prompt = extract_prompt(payload, args.prompt)
+        session_id = extract_session_id(payload, args.session_id)
         if len(prompt.strip()) < 2:
             note("prompt 太短，不注入")
             return
@@ -122,6 +134,7 @@ def main() -> None:
             block, result = build_block(
                 prompt, config, connection,
                 use_embedder=not args.no_embed, no_dedup=args.no_log,
+                session_id=session_id,
             )
             note(f"走过 {result.path_used}｜命中 {len(result.candidates)}｜"
                  f"跳过 {result.skipped}")
@@ -133,13 +146,14 @@ def main() -> None:
             connection.close()
 
         if not args.no_log:
-            log_injections(prompt, result, config, args)
+            log_injections(prompt, result, config, args, session_id)
     except Exception as error:  
         note(f"[降级] {type(error).__name__}: {error}")
         return
 
 
-def log_injections(prompt: str, result, config: dict, args) -> None:
+def log_injections(prompt: str, result, config: dict, args,
+                   session_id: str | None = None) -> None:
     ""
     try:
         db_path = args.db or db.resolve_path(config["db"]["path"])
@@ -148,7 +162,9 @@ def log_injections(prompt: str, result, config: dict, args) -> None:
             digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
             for candidate in render.pick_candidates(result.candidates, config, connection):
                 store.log_injection(connection, digest, candidate.file_id,
-                                    candidate.source, candidate.tier)
+                                    candidate.source, candidate.tier,
+                                    session_id=session_id,
+                                    route_ranks=result.ranks_of(candidate.file_id))
             connection.commit()
         finally:
             connection.close()

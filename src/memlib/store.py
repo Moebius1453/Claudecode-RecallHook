@@ -479,23 +479,27 @@ def see_also_of(connection: sqlite3.Connection, file_id: int) -> list[dict]:
 
 
 
-def recently_injected(connection: sqlite3.Connection, window_hours: int) -> set[int]:
+def recently_injected(connection: sqlite3.Connection, window_hours: int,
+                      session_id: str | None = None) -> set[int]:
     ""
     modifier = f"-{int(window_hours)} hours"
-    rows = connection.execute(
-        "SELECT DISTINCT file_id FROM injection_log "
-        "WHERE file_id IS NOT NULL AND ts > datetime('now', ?)",
-        (modifier,),
-    ).fetchall()
-    return {int(row[0]) for row in rows}
+    sql = ("SELECT DISTINCT file_id FROM injection_log "
+           "WHERE file_id IS NOT NULL AND ts > datetime('now', ?)")
+    params: list = [modifier]
+    if session_id:
+        sql += " OR (file_id IS NOT NULL AND session_id = ?)"
+        params.append(session_id)
+    return {int(row[0]) for row in connection.execute(sql, params)}
 
 
 def log_injection(connection: sqlite3.Connection, prompt_hash: str, file_id: int,
-                  source: str, tier_at_inject: str) -> None:
+                  source: str, tier_at_inject: str,
+                  session_id: str | None = None,
+                  route_ranks: str | None = None) -> None:
     connection.execute(
-        "INSERT INTO injection_log(prompt_hash, file_id, source, tier_at_inject) "
-        "VALUES(?,?,?,?)",
-        (prompt_hash, file_id, source, tier_at_inject),
+        "INSERT INTO injection_log(prompt_hash, file_id, source, tier_at_inject, "
+        "session_id, route_ranks) VALUES(?,?,?,?,?,?)",
+        (prompt_hash, file_id, source, tier_at_inject, session_id, route_ranks),
     )
 
 

@@ -51,9 +51,16 @@ CREATE TABLE injection_log (
     prompt_hash TEXT NOT NULL,
     file_id INTEGER REFERENCES files(id),
     source TEXT CHECK(source IN ('always','trigger','ngram','fts','vector','see_also','manual')),
-    tier_at_inject TEXT
+    tier_at_inject TEXT,
+    -- 会话级去重的依据（08 §10.2-H2）。payload 的 session_id 实测存在，
+    -- 见 docs/hook-payload-sample.json。旧行为 NULL。
+    session_id TEXT,
+    -- 每路名次的 JSON，如 {"trigger":0,"ngram":3}。不记这个就无法用证据调
+    -- 1.0/0.8/0.6 的路权重和 0.50 的向量阈值（08 §10.2-H3）。
+    route_ranks TEXT
 );
 CREATE INDEX idx_injlog_file_ts ON injection_log(file_id, ts);
+CREATE INDEX idx_injlog_session ON injection_log(session_id, file_id);
 
 CREATE TABLE tier_events (
     id INTEGER PRIMARY KEY,
@@ -90,7 +97,7 @@ CREATE INDEX idx_cards_status ON candidate_cards(status);
 
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 INSERT INTO meta (key, value) VALUES
-    ('schema_version', '9'),
+    ('schema_version', '10'),
     ('warm_demotion_days', '90'),
     ('resting_demotion_days', '180'),
     ('promotion_window_days', '30'),

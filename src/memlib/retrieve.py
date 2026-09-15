@@ -1,6 +1,6 @@
 ""
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import sqlite3
 
 from . import store, tfidf, vector as vec
@@ -25,10 +25,20 @@ class Result:
     path_used: str       
     candidates: list[Candidate]
     skipped: list[str]   
+    
+    
+    
+    route_ranks: dict[int, dict[str, int]] = field(default_factory=dict)
 
     @property
     def empty(self) -> bool:
         return not self.candidates
+
+    def ranks_of(self, file_id: int) -> str:
+        ""
+        import json
+        return json.dumps(self.route_ranks.get(file_id, {}), ensure_ascii=False,
+                          separators=(",", ":"), sort_keys=True)
 
 
 class SkipStrategy(Exception):
@@ -139,10 +149,11 @@ STRATEGIES = {
 
 
 def rrf_fuse(lists: dict[str, list[Candidate]], k: int,
-             weights: dict[str, float]) -> list[Candidate]:
+             weights: dict[str, float]) -> tuple[list[Candidate], dict[int, dict[str, int]]]:
     ""
     scores: dict[int, float] = {}
     origin: dict[int, Candidate] = {}
+    ranks: dict[int, dict[str, int]] = {}
     for name, items in lists.items():
         weight = float(weights.get(name, 1.0))
         seen: set[int] = set()
@@ -153,13 +164,14 @@ def rrf_fuse(lists: dict[str, list[Candidate]], k: int,
             rank = len(seen)
             seen.add(key)
             scores[key] = scores.get(key, 0.0) + weight / (k + rank + 1)
+            ranks.setdefault(key, {})[name] = rank
             
             origin.setdefault(key, candidate)
 
     fused = [replace(origin[key], score=score) for key, score in scores.items()]
     
     fused.sort(key=lambda item: (store.TIER_RANK.get(item.tier, 9), -item.score, item.path))
-    return fused
+    return fused, ranks
 
 
 def retrieve(
@@ -193,10 +205,11 @@ def retrieve(
     if not lists:
         return Result(query=query, path_used="none", candidates=[], skipped=skipped)
 
-    fused = rrf_fuse(lists, int(context.get("rrf_k", 60)), weights)
+    fused, ranks = rrf_fuse(lists, int(context.get("rrf_k", 60)), weights)
     if limit:
         fused = fused[:limit]
-    return Result(query=query, path_used="+".join(lists), candidates=fused, skipped=skipped)
+    return Result(query=query, path_used="+".join(lists), candidates=fused,
+                  skipped=skipped, route_ranks=ranks)
 
 
 def build_context(config: dict, connection: sqlite3.Connection, embedder=None) -> dict:

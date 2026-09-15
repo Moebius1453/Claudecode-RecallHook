@@ -9,7 +9,7 @@ MAIN_DIR = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schema.sql"
 DEFAULT_CONFIG_PATH = MAIN_DIR / "config.toml"
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 MIGRATIONS: dict[int, list[str]] = {
@@ -73,6 +73,14 @@ MIGRATIONS: dict[int, list[str]] = {
         
         "INSERT INTO meta(key,value) VALUES('always_line_chars','120') "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+    ],
+    10: [
+        
+        
+        
+        "ALTER TABLE injection_log ADD COLUMN session_id TEXT",
+        "ALTER TABLE injection_log ADD COLUMN route_ranks TEXT",
+        "CREATE INDEX idx_injlog_session ON injection_log(session_id, file_id)",
     ],
 }
 

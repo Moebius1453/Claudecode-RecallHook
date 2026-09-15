@@ -169,7 +169,7 @@ def run(connection, config: dict, client: llm.LlamaClient, *, limit: int = 0,
     rows = store.list_files(connection)
     texts = corpus_texts(connection)
     stats = {"files": 0, "skipped": 0, "accepted": 0, "rejected": 0, "failed": 0,
-             "reject_reasons": Counter()}
+             "failed_empty": 0, "failed_malformed": 0, "reject_reasons": Counter()}
 
     for row in rows[:limit] if limit else rows:
         file_id = row["id"]
@@ -180,10 +180,16 @@ def run(connection, config: dict, client: llm.LlamaClient, *, limit: int = 0,
 
         stats["files"] += 1
         stem = Path(row["path"]).stem
-        payload = client.chat_json(build_prompt(stem, row["description"] or ""), max_tokens=300)
-        if not payload or not isinstance(payload.get("triggers"), list):
+        reply = client.chat_json_reply(build_prompt(stem, row["description"] or ""),
+                                       max_tokens=300)
+        payload = reply.data
+        if not reply.ok or not isinstance((payload or {}).get("triggers"), list):
+            
+            
             stats["failed"] += 1
-            log(f"  [fail] {row['name']}: 模型没给出可用 JSON")
+            stats["failed_empty" if reply.kind == "empty" else "failed_malformed"] += 1
+            detail = "模型没说话（空回复）" if reply.kind == "empty" else "模型回的不是可用 JSON"
+            log(f"  [fail:{reply.kind}] {row['name']}: {detail}｜原文 {reply.raw[:60]!r}")
             continue
 
         own_text = texts[file_id]
@@ -268,7 +274,8 @@ def main() -> None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         print(f"处理 {stats['files']} 个文件（跳过 {stats['skipped']}）｜"
-              f"采纳 {stats['accepted']}｜拒绝 {stats['rejected']}｜失败 {stats['failed']}")
+              f"采纳 {stats['accepted']}｜拒绝 {stats['rejected']}｜失败 {stats['failed']}"
+              f"（空回复 {stats['failed_empty']} / 畸形 {stats['failed_malformed']}）")
         if stats["reject_reasons"]:
             print("拒绝原因：" + "｜".join(
                 f"{reason} {count}" for reason, count in stats["reject_reasons"].most_common()))

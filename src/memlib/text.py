@@ -8,6 +8,10 @@ _WS = re.compile(r"\s+")
 MIN_KEYWORD_LEN = 2
 
 
+
+_TOKEN = re.compile(r"[㐀-䶿一-鿿豈-﫿]+|[a-z0-9]+")
+
+
 def normalize(text: str) -> str:
     ""
     text = unicodedata.normalize("NFKC", text or "")
@@ -30,19 +34,18 @@ def keyword_reject_reason(keyword: str) -> str | None:
 
 def ngrams(text: str, n: int = 3, limit: int = 0) -> list[str]:
     ""
-    compact = normalize(text).replace(" ", "")
-    if not compact:
-        return []
-    if len(compact) < n:
-        return [compact]
     seen: dict[str, None] = {}
-    for i in range(len(compact) - n + 1):
-        gram = compact[i:i + n]
-        if " " in gram:
-            continue
-        seen.setdefault(gram, None)
-        if limit and len(seen) >= limit:
-            break
+    for token in _TOKEN.findall(normalize(text)):
+        if token[0].isascii():
+            pieces = [token]
+        elif len(token) < n:
+            pieces = [token]
+        else:
+            pieces = [token[i:i + n] for i in range(len(token) - n + 1)]
+        for piece in pieces:
+            seen.setdefault(piece, None)
+            if limit and len(seen) >= limit:
+                return list(seen)
     return list(seen)
 
 
