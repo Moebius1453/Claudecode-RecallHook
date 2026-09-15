@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from memlib import db, llm, store
+from memlib import db, dedup, llm, store
 
 
 ROLE_LABEL = {"user": "用户", "assistant": "助手"}
@@ -84,9 +84,16 @@ def run(connection, config, client, *, limit_batches: int = 0,
     batch_turns = int(screen_cfg.get("batch_turns", 12))
     batch_max_chars = int(screen_cfg.get("batch_max_chars", 12000))
     max_retries = int(screen_cfg.get("max_retries", 3))
+    topic_threshold = float(screen_cfg.get("dedup_topic_threshold", 0.30))
+    full_threshold = float(screen_cfg.get("dedup_full_threshold", 0.10))
 
-    stats = {"batches": 0, "turns": 0, "cards": 0, "discarded": 0,
+    stats = {"batches": 0, "turns": 0, "cards": 0, "discarded": 0, "duplicates": 0,
              "failed": 0, "abandoned": 0, "empty": 0, "malformed": 0}
+
+    
+    
+    known = [dedup.Card(id=i, topic=t, summary=s)
+             for i, t, s in store.canonical_cards(connection)]
 
     pending = store.pending_turns(connection)
     if not pending:
@@ -146,7 +153,22 @@ def run(connection, config, client, *, limit_batches: int = 0,
                 classification=classification)
             store.mark_turns_screened(connection, ids, card_id)
             stats["cards"] += 1
-            log(f"  [{classification}] {topic[:40]}")
+
+            
+            candidate_card = dedup.Card(id=card_id, topic=topic, summary=summary)
+            dup_id, score, signal = dedup.find_duplicate(
+                candidate_card, known,
+                topic_threshold=topic_threshold, full_threshold=full_threshold)
+            if dup_id is not None:
+                store.set_card_duplicate(connection, card_id, dup_id)
+                stats["duplicates"] += 1
+                log(f"  [{classification}] {topic[:40]}"
+                    f"  ↳ 与 #{dup_id} 重复（{signal} {score:.3f}）")
+            else:
+                known.append(candidate_card)
+                
+                log(f"  [{classification}] {topic[:40]}"
+                    f"  （最近 {score:.3f}/{signal or '无'}）")
         connection.commit()
 
     return stats
@@ -195,7 +217,7 @@ def main() -> None:
         print(json.dumps(stats, ensure_ascii=False, indent=2))
     else:
         print(f"批次 {stats['batches']}｜轮次 {stats['turns']}｜成卡 {stats['cards']}｜"
-              f"discard {stats['discarded']}｜失败 {stats['failed']}"
+              f"discard {stats['discarded']}｜重复 {stats['duplicates']}｜失败 {stats['failed']}"
               f"（空回复 {stats['empty']} / 畸形 {stats['malformed']}）｜"
               f"放弃 {stats['abandoned']}"
               + ("（dry-run 未调用模型）" if args.dry_run else ""))

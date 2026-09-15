@@ -9,7 +9,7 @@ MAIN_DIR = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schema.sql"
 DEFAULT_CONFIG_PATH = MAIN_DIR / "config.toml"
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 MIGRATIONS: dict[int, list[str]] = {
@@ -102,6 +102,12 @@ MIGRATIONS: dict[int, list[str]] = {
         )""",
         "CREATE INDEX idx_turns_status ON turns(status, id)",
         "CREATE INDEX idx_turns_session ON turns(session_id, id)",
+    ],
+    12: [
+        
+        
+        "ALTER TABLE candidate_cards ADD COLUMN duplicate_of INTEGER "
+        "REFERENCES candidate_cards(id)",
     ],
 }
 

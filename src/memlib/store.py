@@ -599,6 +599,27 @@ def set_capture_offset(connection: sqlite3.Connection, source_path: str,
     )
 
 
+def canonical_cards(connection: sqlite3.Connection) -> list[tuple[int, str, str]]:
+    ""
+    return [tuple(row) for row in connection.execute(
+        "SELECT id, topic, summary FROM candidate_cards "
+        "WHERE duplicate_of IS NULL AND classification <> 'discard' ORDER BY id")]
+
+
+def set_card_duplicate(connection: sqlite3.Connection, card_id: int,
+                       canonical_id: int) -> None:
+    ""
+    connection.execute("UPDATE candidate_cards SET duplicate_of=? WHERE id=?",
+                       (canonical_id, card_id))
+
+
+def card_clusters(connection: sqlite3.Connection) -> list[tuple[int, int]]:
+    ""
+    return [tuple(row) for row in connection.execute(
+        "SELECT id, duplicate_of FROM candidate_cards "
+        "WHERE duplicate_of IS NOT NULL ORDER BY id")]
+
+
 def add_card(connection: sqlite3.Connection, *, source_session: str, ts: str | None,
              topic: str, summary: str, snippet: str | None, why: str | None,
              classification: str, source_kind: str = "text",
@@ -644,6 +665,7 @@ def status(connection: sqlite3.Connection) -> dict:
             )
         },
         "cards_new": scalar("SELECT COUNT(*) FROM candidate_cards WHERE status='new'"),
+        "cards_dup": scalar("SELECT COUNT(*) FROM candidate_cards WHERE duplicate_of IS NOT NULL"),
         "turns": turn_counts(connection),
         "schema_version": get_meta(connection, "schema_version"),
         "embed_model": get_meta(connection, "embed_model"),

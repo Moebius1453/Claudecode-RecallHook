@@ -120,13 +120,16 @@ CREATE TABLE candidate_cards (
     discarded_until TEXT,
     card_vector BLOB,
     source_kind TEXT NOT NULL DEFAULT 'text',
-    noise_flags TEXT NOT NULL DEFAULT '[]'
+    noise_flags TEXT NOT NULL DEFAULT '[]',
+    -- 跨批去重（08 §17）：本卡与哪张卡讲的是同一件事。**指向先出现的那张**。
+    -- 被标记的卡**不删、不隐藏**（规矩：归档而非删除），排水时按簇看而不是逐条看。
+    duplicate_of INTEGER REFERENCES candidate_cards(id)
 );
 CREATE INDEX idx_cards_status ON candidate_cards(status);
 
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 INSERT INTO meta (key, value) VALUES
-    ('schema_version', '11'),
+    ('schema_version', '12'),
     ('warm_demotion_days', '90'),
     ('resting_demotion_days', '180'),
     ('promotion_window_days', '30'),
