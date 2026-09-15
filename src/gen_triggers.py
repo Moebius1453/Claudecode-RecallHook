@@ -106,6 +106,15 @@ def derive_short_forms(word: str) -> list[str]:
     return forms
 
 
+def _squash(text: str) -> str:
+    ""
+    return "".join(char for char in text.lower() if char.isalnum() or _is_cjk(char))
+
+
+def _squash_in(word: str, text: str) -> bool:
+    return _squash(word) in _squash(text)
+
+
 def gate(word: str, own_text: str, corpus_text: dict[int, str],
          accepted: list[str]) -> tuple[bool, str]:
     ""
@@ -141,6 +150,20 @@ def gate(word: str, own_text: str, corpus_text: dict[int, str],
     
     if hits and word not in own_text:
         return False, f"不属于本文件（{hits} 个别的文件正文里有它）"
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    if word.isascii() and not _squash_in(word, own_text):
+        return False, "英文词在本文件里找不到（不在正文里，多半是模型编的）"
 
     
     
