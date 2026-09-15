@@ -203,6 +203,52 @@ def tier_event_counts(connection: sqlite3.Connection) -> int:
     return int(connection.execute("SELECT COUNT(*) FROM tier_events").fetchone()[0])
 
 
+def refresh_injection_stats(connection: sqlite3.Connection, window_days: int) -> int:
+    ""
+    modifier = f"-{int(window_days)} days"
+    before = connection.execute(
+        "SELECT COUNT(*) FROM files WHERE inject_count > 0 "
+        "OR last_injected_at IS NOT NULL").fetchone()[0]
+    connection.execute(
+        "UPDATE files SET "
+        "inject_count = (SELECT COUNT(*) FROM injection_log i "
+        "                WHERE i.file_id = files.id AND i.ts > datetime('now', ?)), "
+        "last_injected_at = (SELECT MAX(i.ts) FROM injection_log i "
+        "                    WHERE i.file_id = files.id)",
+        (modifier,),
+    )
+    after = connection.execute(
+        "SELECT COUNT(*) FROM files WHERE inject_count > 0 "
+        "OR last_injected_at IS NOT NULL").fetchone()[0]
+    return after
+
+
+def files_for_tier_review(connection: sqlite3.Connection) -> list[dict]:
+    ""
+    return [row_to_dict(row) for row in connection.execute(
+        f"SELECT {FILE_COLUMNS} FROM files WHERE missing_since IS NULL ORDER BY path"
+    )]
+
+
+def set_pinned(connection: sqlite3.Connection, file_id: int, pinned: bool) -> bool:
+    ""
+    cursor = connection.execute(
+        "UPDATE files SET pinned=? WHERE id=? AND pinned<>?",
+        (1 if pinned else 0, file_id, 1 if pinned else 0),
+    )
+    return bool(cursor.rowcount)
+
+
+def log_tier_event(connection: sqlite3.Connection, file_id: int, old_tier: str,
+                   new_tier: str, reason: str, actor: str) -> None:
+    ""
+    connection.execute(
+        "INSERT INTO tier_events(file_id, old_tier, new_tier, reason, actor) "
+        "VALUES(?,?,?,?,?)",
+        (file_id, old_tier, new_tier, reason, actor),
+    )
+
+
 
 
 def replace_triggers(connection: sqlite3.Connection, file_id: int,
@@ -613,13 +659,6 @@ def set_card_duplicate(connection: sqlite3.Connection, card_id: int,
                        (canonical_id, card_id))
 
 
-def card_clusters(connection: sqlite3.Connection) -> list[tuple[int, int]]:
-    ""
-    return [tuple(row) for row in connection.execute(
-        "SELECT id, duplicate_of FROM candidate_cards "
-        "WHERE duplicate_of IS NOT NULL ORDER BY id")]
-
-
 def all_card_rows(connection: sqlite3.Connection) -> list[dict]:
     ""
     return [dict(zip(("id", "topic", "summary", "classification", "duplicate_of"), row))
@@ -633,6 +672,42 @@ def clear_card_duplicates(connection: sqlite3.Connection) -> int:
     cursor = connection.execute(
         "UPDATE candidate_cards SET duplicate_of=NULL WHERE duplicate_of IS NOT NULL")
     return cursor.rowcount
+
+
+def pending_cards(connection: sqlite3.Connection, *, include_discard: bool = False,
+                  include_written: bool = False) -> list[dict]:
+    ""
+    columns = ("id, source_session, ts, topic, summary, snippet, why, "
+               "classification, status, duplicate_of")
+    clauses = []
+    if not include_written:
+        clauses.append("status <> 'written'")
+    if not include_discard:
+        clauses.append("classification <> 'discard'")
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    rows = connection.execute(
+        f"SELECT {columns} FROM candidate_cards{where} ORDER BY id").fetchall()
+    keys = tuple(name.strip() for name in columns.split(","))
+    return [dict(zip(keys, row)) for row in rows]
+
+
+def card_clusters(connection: sqlite3.Connection, cards: list[dict] | None = None
+                  ) -> list[tuple[dict, list[dict]]]:
+    ""
+    cards = cards if cards is not None else pending_cards(connection)
+    by_id = {card["id"]: card for card in cards}
+    clusters: dict[int, list[dict]] = {}
+    for card in cards:
+        
+        root = card["duplicate_of"] if card["duplicate_of"] in by_id else card["id"]
+        clusters.setdefault(root, []).append(card)
+    result = []
+    for root_id, members in clusters.items():
+        members.sort(key=lambda card: card["id"])
+        head = by_id.get(root_id, members[0])
+        result.append((head, [m for m in members if m["id"] != root_id]))
+    result.sort(key=lambda pair: pair[0]["id"])
+    return result
 
 
 def add_card(connection: sqlite3.Connection, *, source_session: str, ts: str | None,

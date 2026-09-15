@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from memlib import always, db, frontmatter, store
+from memlib import always, db, frontmatter, regrade, store
 
 
 def init_tiers(connection, *, apply: bool, log) -> dict:
@@ -31,6 +31,8 @@ def main() -> None:
     parser.add_argument("--db", type=Path, default=None)
     parser.add_argument("--init-tiers", action="store_true",
                         help="按 kind 回填从未被 tier 系统动过的行")
+    parser.add_argument("--recompute", action="store_true",
+                        help="升降级：刷新用量 → 晋升 → always 挤人 → 降级")
     parser.add_argument("--sync-always", action="store_true",
                         help="把 always 档写进 MEMORY.md")
     parser.add_argument("--dry-run", action="store_true", help="只算不写")
@@ -40,8 +42,10 @@ def main() -> None:
     args = parser.parse_args()
 
     
-    run_init = args.init_tiers or not args.sync_always
-    run_sync = args.sync_always or not args.init_tiers
+    explicit = args.init_tiers or args.recompute or args.sync_always
+    run_init = args.init_tiers or not explicit
+    run_recompute = args.recompute or not explicit
+    run_sync = args.sync_always or not explicit
 
     result: dict = {}
 
@@ -60,6 +64,12 @@ def main() -> None:
     try:
         if run_init:
             result["init"] = init_tiers(connection, apply=not args.dry_run, log=log)
+            if not args.dry_run:
+                connection.commit()
+
+        if run_recompute:
+            result["regrade"] = regrade.regrade(connection, apply=not args.dry_run,
+                                                log=log)
             if not args.dry_run:
                 connection.commit()
 
@@ -85,6 +95,19 @@ def main() -> None:
         info = result["init"]
         print(f"初值回填：看过 {info['considered']} 行，改动 {len(info['moved'])} 行"
               + ("（dry-run 未落盘）" if args.dry_run else ""))
+    if "regrade" in result:
+        info = result["regrade"]
+        stats, th = info["stats"], info["thresholds"]
+        print(f"升降级：评审 {stats['reviewed']} 行｜晋升 {stats['promoted']}｜"
+              f"挤人 {stats['evicted']}｜降级 {stats['demoted']}｜"
+              f"跳过（pinned {stats['pinned']}／从未注入 {stats['never_injected']}）"
+              + ("（dry-run 未落盘）" if args.dry_run else ""))
+        if not stats["promoted"] and not stats["demoted"] and not stats["evicted"]:
+            print(f"  （空转是正常的：判据来自 injection_log，"
+                  f"hook 没上电时它一直是空的。阈值 "
+                  f"{th['promotion_window_days']}天≥{th['promotion_min_injections']}次 / "
+                  f"{th['warm_demotion_days']:.0f}天 / "
+                  f"{th['resting_demotion_days']:.0f}天 / cap {th['always_cap']}）")
     if "always" in result:
         info = result["always"]
         if not info["ok"]:

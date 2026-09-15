@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 import json
 import sys
+import textwrap
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -171,6 +172,61 @@ def cmd_tier_set(connection, args) -> int:
     return 0
 
 
+def cmd_cards(connection, args) -> int:
+    ""
+    cards = store.pending_cards(connection, include_discard=args.discard,
+                                include_written=args.all_status)
+    if not cards:
+        print("没有待排水的候选卡")
+        return 0
+    clusters = store.card_clusters(connection, cards)
+    shown = clusters[: args.limit] if args.limit else clusters
+
+    print(f"待排水 {len(cards)} 张 → {len(clusters)} 簇"
+          + (f"（只显示前 {len(shown)} 簇）" if len(shown) < len(clusters) else ""))
+    print()
+    for head, members in shown:
+        note = f"  ↳ 另有 {len(members)} 张同一件事" if members else ""
+        print(f"#{head['id']} [{head['classification']}] {head['topic']}{note}")
+        if args.full:
+            text = (head["summary"] or "").strip()
+            if text:
+                print(textwrap.fill(text, 96, initial_indent="    ",
+                                    subsequent_indent="    "))
+            if head["why"]:
+                print(textwrap.fill(f"为什么记: {head['why']}", 96,
+                                    initial_indent="    ", subsequent_indent="    "))
+        if args.all and members:
+            for member in members:
+                print(f"    #{member['id']} [{member['classification']}] {member['topic']}")
+    return 0
+
+
+def cmd_pin(connection, args) -> int:
+    return _set_pinned(connection, args.name, True)
+
+
+def cmd_unpin(connection, args) -> int:
+    return _set_pinned(connection, args.name, False)
+
+
+def _set_pinned(connection, name: str, pinned: bool) -> int:
+    ""
+    found = _resolve_file(connection, name)
+    if found is None:
+        print(f"没有 name={name} 的文件", file=sys.stderr)
+        return 1
+    if not store.set_pinned(connection, found["id"], pinned):
+        print(f"{name}: 已经是{'锁' if pinned else '未锁'}状态，未变更")
+        return 0
+    store.log_tier_event(connection, found["id"], found["tier"], found["tier"],
+                         "pin" if pinned else "unpin", "user")
+    connection.commit()
+    print(f"{name}: {'已锁档（升降级将跳过它）' if pinned else '已解锁'}"
+          f"｜当前 {found['tier']}")
+    return 0
+
+
 def cmd_meta(connection, args) -> int:
     ""
     if args.key and args.value is not None:
@@ -253,6 +309,22 @@ def main() -> None:
     export = subparsers.add_parser("frontmatter-export", help="打印 frontmatter 片段（不写 md）")
     export.add_argument("--limit", type=int, default=0)
 
+    pin = subparsers.add_parser("pin", help="锁档：升降级跳过它（01 §2 的撤销口）")
+    pin.add_argument("name")
+
+    unpin = subparsers.add_parser("unpin", help="解锁")
+    unpin.add_argument("name")
+
+    cards = subparsers.add_parser("cards", help="待排水候选卡（按簇看）")
+    cards.add_argument("--limit", type=int, default=20,
+                       help="最多显示几簇（0 = 全部）。默认 20，别把几百张倒进对话")
+    cards.add_argument("--full", action="store_true", help="带上摘要与理由")
+    cards.add_argument("--all", action="store_true", help="展开每个簇的成员")
+    cards.add_argument("--discard", action="store_true",
+                       help="包含模型判为 discard 的（抽查误判用）")
+    cards.add_argument("--all-status", action="store_true",
+                       help="包含已排水的（status='written'）")
+
     meta = subparsers.add_parser("meta", help="查看/修改阈值（调参入口）")
     meta.add_argument("key", nargs="?")
     meta.add_argument("value", nargs="?")
@@ -278,6 +350,12 @@ def main() -> None:
             code = cmd_trigger_edit(connection, args, add=False)
         elif args.command == "tier-set":
             code = cmd_tier_set(connection, args)
+        elif args.command == "pin":
+            code = cmd_pin(connection, args)
+        elif args.command == "unpin":
+            code = cmd_unpin(connection, args)
+        elif args.command == "cards":
+            code = cmd_cards(connection, args)
         elif args.command == "meta":
             code = cmd_meta(connection, args)
         else:
