@@ -620,6 +620,21 @@ def card_clusters(connection: sqlite3.Connection) -> list[tuple[int, int]]:
         "WHERE duplicate_of IS NOT NULL ORDER BY id")]
 
 
+def all_card_rows(connection: sqlite3.Connection) -> list[dict]:
+    ""
+    return [dict(zip(("id", "topic", "summary", "classification", "duplicate_of"), row))
+            for row in connection.execute(
+                "SELECT id, topic, summary, classification, duplicate_of "
+                "FROM candidate_cards ORDER BY id")]
+
+
+def clear_card_duplicates(connection: sqlite3.Connection) -> int:
+    ""
+    cursor = connection.execute(
+        "UPDATE candidate_cards SET duplicate_of=NULL WHERE duplicate_of IS NOT NULL")
+    return cursor.rowcount
+
+
 def add_card(connection: sqlite3.Connection, *, source_session: str, ts: str | None,
              topic: str, summary: str, snippet: str | None, why: str | None,
              classification: str, source_kind: str = "text",

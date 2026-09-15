@@ -51,17 +51,20 @@ def find_duplicate(new: Card, existing: list[Card], *,
     if not new_topic and not new_full:
         return None, 0.0, ""
 
-    best_id, best_score, best_signal = None, 0.0, ""
+    best_id, best_score = None, 0.0
     raw_score, raw_signal = 0.0, ""
     for other in existing:
         topic_score = overlap(new_topic, other.topic_fp)
         full_score = jaccard(new_full, other.full_fp)
+        
         if topic_score > raw_score:
             raw_score, raw_signal = topic_score, "topic"
         if full_score > raw_score:
             raw_score, raw_signal = full_score, "full"
-        if topic_score >= topic_threshold and topic_score > best_score:
-            best_id, best_score, best_signal = other.id, topic_score, "topic"
-        elif full_score >= full_threshold and full_score > best_score:
-            best_id, best_score, best_signal = other.id, full_score, "full"
+        
+        if topic_score < topic_threshold or full_score < full_threshold:
+            continue
+        combined = max(topic_score, full_score)
+        if combined > best_score:
+            best_id, best_score = other.id, combined
     return best_id, raw_score, raw_signal
