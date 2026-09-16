@@ -54,9 +54,37 @@ def open_readonly(db_path: Path) -> sqlite3.Connection:
     return connection
 
 
+
+GAP_KEYS = {
+    "high": "inject_gap_high_min",
+    "medium": "inject_gap_medium_min",
+    "low": "inject_gap_low_min",
+}
+
+
+def rate_limit_ok(connection: sqlite3.Connection, session_id: str | None,
+                  confidence: str, note) -> bool:
+    ""
+    key = GAP_KEYS.get(confidence)
+    if key is None or not session_id:
+        return True
+    required = float(store.get_meta(connection, key, "0") or 0)
+    if required <= 0:
+        return True
+    elapsed = store.minutes_since_last_injection(connection, session_id)
+    if elapsed is None:
+        return True
+    if elapsed < required:
+        note(f"限频：{confidence} 档要求间隔 {required:.0f} 分钟，"
+             f"本会话才过 {elapsed:.1f} 分钟")
+        return False
+    return True
+
+
 def build_block(prompt: str, config: dict, connection: sqlite3.Connection,
                 *, use_embedder: bool, no_dedup: bool,
-                session_id: str | None = None) -> tuple[str, list]:
+                session_id: str | None = None, note=None) -> tuple[str, list]:
+    note = note or (lambda _message: None)
     embedder = None
     if use_embedder:
         from memlib import embed
@@ -72,6 +100,16 @@ def build_block(prompt: str, config: dict, connection: sqlite3.Connection,
         candidates = [c for c in candidates if c.file_id not in already]
 
     block = render.render(candidates, config, connection)
+    if not block:
+        return "", result
+
+    
+    
+    confidence = result.confidence()
+    if not no_dedup and not rate_limit_ok(connection, session_id, confidence, note):
+        return "", result
+    note(f"置信度 {confidence}")
+
     render.assert_within_budget(block, connection)
     return block, result
 
@@ -134,7 +172,7 @@ def main() -> None:
             block, result = build_block(
                 prompt, config, connection,
                 use_embedder=not args.no_embed, no_dedup=args.no_log,
-                session_id=session_id,
+                session_id=session_id, note=note,
             )
             note(f"走过 {result.path_used}｜命中 {len(result.candidates)}｜"
                  f"跳过 {result.skipped}")

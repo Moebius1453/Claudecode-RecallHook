@@ -34,6 +34,19 @@ class Result:
     def empty(self) -> bool:
         return not self.candidates
 
+    def confidence(self) -> str:
+        ""
+        if not self.candidates:
+            return "none"
+        top = self.candidates[0]
+        if len(self.route_ranks.get(top.file_id, {})) >= 2:
+            return "high"
+        if top.source == "trigger":
+            return "high"
+        if top.source in ("vector", "tfidf"):
+            return "medium"
+        return "low"
+
     def ranks_of(self, file_id: int) -> str:
         ""
         import json

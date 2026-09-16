@@ -35,7 +35,16 @@ DEFAULT_META = {
     "injection_max_line_chars": "40",
     "injection_max_chars": "120",
     "discard_retention_days": "30",
-    "vector_threshold": "0.55",
+    
+    
+    
+    "vector_threshold": "0.70",
+    
+    
+    
+    "inject_gap_high_min": "1",
+    "inject_gap_medium_min": "30",
+    "inject_gap_low_min": "120",
 }
 
 
@@ -536,6 +545,15 @@ def recently_injected(connection: sqlite3.Connection, window_hours: int,
         sql += " OR (file_id IS NOT NULL AND session_id = ?)"
         params.append(session_id)
     return {int(row[0]) for row in connection.execute(sql, params)}
+
+
+def minutes_since_last_injection(connection: sqlite3.Connection,
+                                 session_id: str) -> float | None:
+    ""
+    row = connection.execute(
+        "SELECT (julianday('now') - julianday(MAX(ts))) * 1440.0 "
+        "FROM injection_log WHERE session_id = ?", (str(session_id),)).fetchone()
+    return float(row[0]) if row is not None and row[0] is not None else None
 
 
 def log_injection(connection: sqlite3.Connection, prompt_hash: str, file_id: int,
