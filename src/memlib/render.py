@@ -67,7 +67,8 @@ def build_header(config: dict) -> str:
         f"{root.get('label', root['path'])}={root['path']}"
         for root in corpus.enabled_roots(config)
     ]
-    return "[记忆索引] 记忆条目（根目录 " + "｜".join(parts) + "）："
+    return ("[记忆索引] 以下为检索猜的线索，未必相关；不确定时去对应 md 确认（根目录 "
+            + "｜".join(parts) + "）：")
 
 
 def clip(text: str, limit: int) -> str:

@@ -2,6 +2,7 @@
 
 import argparse
 from pathlib import Path
+import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -48,6 +49,52 @@ def build_conversation(turns: list[dict]) -> str:
         label = ROLE_LABEL.get(turn["role"], turn["role"])
         lines.append(f"[{label}] {turn['text']}")
     return "\n\n".join(lines)
+
+
+SNIPPET_CHARS = 600
+
+
+
+
+
+
+
+
+
+
+
+
+
+_REDACTIONS = (
+    (re.compile(r"(密码|口令|passwd|password)\s*[是为:：]?\s*\S+", re.I), r"\1=<已抹去>"),
+    (re.compile(r"(账号|帐号)\s*[是为:：]?\s*\S+"), r"\1=<已抹去>"),
+    (re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), "<手机号>"),
+    (re.compile(r"(?i)\b(api[_-]?key|access[_-]?token|secret|token)\b\s*[=:：]\s*\S+"),
+     r"\1=<已抹去>"),
+    (re.compile(r"\bsk-[A-Za-z0-9\-_]{12,}"), "<密钥>"),
+    (re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b"), "<邮箱>"),
+)
+
+
+def redact(text: str) -> str:
+    for pattern, replacement in _REDACTIONS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def evidence_text(turns: list[dict]) -> str | None:
+    ""
+    if not turns:
+        return None
+    user_turns = [turn for turn in turns if turn.get("role") == "user"]
+    chosen = user_turns or turns
+    head = (chosen[0].get("text") or "").strip()
+    if not user_turns:
+        
+        return redact(head[:SNIPPET_CHARS]) or None
+    text = " ／ ".join((turn.get("text") or "").strip() for turn in chosen)
+    text = text.strip(" ／").strip()
+    return redact(text[:SNIPPET_CHARS]) or redact(head[:SNIPPET_CHARS]) or None
 
 
 def make_batches(turns: list[dict], batch_turns: int,
@@ -174,7 +221,7 @@ def run(connection, config, client, *, embedder=None, limit_batches: int = 0,
             card_id = store.add_card(
                 connection, source_session=batch[0]["session_id"],
                 ts=batch[0].get("ts"), topic=topic, summary=summary,
-                snippet=batch[0]["text"][:500], why=why,
+                snippet=evidence_text(batch), why=why,
                 classification=classification,
                 card_vector=vec.pack(vector) if vector is not None else None)
             store.mark_turns_screened(connection, ids, card_id)

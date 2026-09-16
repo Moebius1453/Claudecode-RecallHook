@@ -34,6 +34,12 @@ CREATE TABLE triggers (
     -- rejected 不删行：被筛掉的候选要能复查（同 04 §4 的 discard 保留策略）
     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','rejected')),
     reason TEXT,
+    -- 查询侧具体度（src\trigger_cohesion.py 算，从 turns 可重建）。
+    -- utterances = 命中它的真实用户发言条数；cohesion = 那些发言的平均两两余弦。
+    -- **只是软信号**：用来决定"多个触发词同时命中时谁赢"和"单个触发词算不算 high"，
+    -- 不删任何词、不改闸门。动机见 08 §28：`解析` 这类泛化动词能一个词注入一个文件。
+    utterances INTEGER,
+    cohesion REAL,
     PRIMARY KEY (file_id, keyword)
 );
 CREATE INDEX idx_triggers_keyword ON triggers(keyword);
@@ -129,7 +135,7 @@ CREATE INDEX idx_cards_status ON candidate_cards(status);
 
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 INSERT INTO meta (key, value) VALUES
-    ('schema_version', '12'),
+    ('schema_version', '13'),
     ('warm_demotion_days', '90'),
     ('resting_demotion_days', '180'),
     ('promotion_window_days', '30'),
@@ -143,7 +149,17 @@ INSERT INTO meta (key, value) VALUES
     ('inject_warm_lines', '5'),
     ('inject_resting_lines', '2'),
     ('discard_retention_days', '30'),
-    ('vector_threshold', '0.50');
+    ('vector_threshold', '0.50'),
+    -- 触发词具体度（v13，08 §28）。**软信号**，不是闸门。
+    -- baseline：语料的平均两两余弦，由 trigger_cohesion.py 实测写入；凝聚度只有
+    --   明显高于它才算"具体"。比它低 = 这个词把互不相干的发言拉到一起了。
+    -- pseudocount：向 baseline 收缩的伪计数。`定位` 命中 3 条发言、凝聚度 0.721，
+    --   看着很具体，其实只是样本少 —— 收缩后掉到 0.572。没有它小样本会两头骗人。
+    -- decimal：delta 到多少算满分。floor：单靠触发词命中时给 high 的门槛。
+    ('trigger_cohesion_baseline', '0.0'),
+    ('trigger_cohesion_pseudocount', '5'),
+    ('trigger_specific_delta', '0.15'),
+    ('trigger_specific_floor', '0.6');
 
 CREATE VIRTUAL TABLE files_fts USING fts5(
     name, description, content='files', content_rowid='id', tokenize='trigram'

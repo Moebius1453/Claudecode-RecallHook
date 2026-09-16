@@ -8,7 +8,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from memlib import db, llm, store
+from memlib import cohesion, db, llm, store
 from memlib.text import normalize
 
 
@@ -17,6 +17,24 @@ STOPWORDS = {
     "项目", "配置", "工具", "文档", "记录", "内容", "系统", "问题", "东西", "相关",
     "记忆", "文件", "设置", "使用", "方法", "信息", "部分", "工作", "事情", "情况",
     "功能", "代码", "数据", "结果", "计划", "想法", "经验", "笔记", "学习", "记录",
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    "解析", "确认", "修正", "修改", "评估", "分析", "检查", "核对", "排查", "定位",
+    "整理", "汇总", "更新", "升级", "迁移", "处理", "解决", "验证", "测试", "对比",
+    "总结", "说明", "介绍", "讨论", "实现", "支持", "影响", "导致",
+    "出现", "发现", "完成", "开始", "结束", "继续", "需要", "要求", "建议", "选择",
+    "决定", "状态", "方案", "方式", "过程", "步骤", "阶段", "范围", "目标", "任务",
+    "结构", "环境", "网络", "显示", "输入", "输出", "列表", "位置", "时间", "数量",
     
     "full", "test", "main", "new", "old", "file", "files", "doc", "docs", "note",
     "list", "item", "part", "first", "next", "data", "info", "type", "name", "size",
@@ -116,10 +134,13 @@ def _squash_in(word: str, text: str) -> bool:
 
 
 def gate(word: str, own_text: str, corpus_text: dict[int, str],
-         accepted: list[str]) -> tuple[bool, str]:
+         accepted: list[str], retired: set[str] | None = None,
+         index=None, floor: float = 0.6) -> tuple[bool, str]:
     ""
     if not word:
         return False, "空词"
+    if retired and word in retired:
+        return False, "已归档（不再重新生成）"
     if any(char.isspace() for char in word):
         return False, "含空白"
     if len(word) < MIN_LEN:
@@ -129,6 +150,11 @@ def gate(word: str, own_text: str, corpus_text: dict[int, str],
         return False, f"太长（{len(word)}，上限 {limit}）"
     if word in STOPWORDS:
         return False, "无区分度的通用词"
+    if index is not None:
+        count, _ = index.stats(word)
+        score = index.specificity(word)
+        if count >= 2 and score < floor:
+            return False, f"查询侧泛化（命中 {count} 条发言，具体度 {score:.2f}）"
     if len(accepted) >= MAX_PER_FILE:
         return False, f"名额已满（每个文件最多 {MAX_PER_FILE} 个）"
     if word.isascii() and len(word) < MIN_ASCII_LEN:
@@ -191,6 +217,13 @@ def run(connection, config: dict, client: llm.LlamaClient, *, limit: int = 0,
         force: bool = False, dry_run: bool = False, log) -> dict:
     rows = store.list_files(connection)
     texts = corpus_texts(connection)
+    retired = store.retired_keywords(connection)
+    
+    
+    index = cohesion.UtteranceIndex.load(connection, config, log)
+    floor = float(store.get_meta(connection, "trigger_specific_floor", "0.6") or 0.6)
+    if index is None:
+        log("查询侧具体度：不可用，本轮的候选不做这道检查")
     stats = {"files": 0, "skipped": 0, "accepted": 0, "rejected": 0, "failed": 0,
              "failed_empty": 0, "failed_malformed": 0, "reject_reasons": Counter()}
 
@@ -227,7 +260,7 @@ def run(connection, config: dict, client: llm.LlamaClient, *, limit: int = 0,
         for word in candidates:
             if any(word == kept for kept, ok, _ in decided if ok):
                 continue
-            ok, reason = gate(word, own_text, texts, accepted)
+            ok, reason = gate(word, own_text, texts, accepted, retired, index, floor)
             if ok:
                 accepted.append(word)
             decided.append((word, ok, reason))

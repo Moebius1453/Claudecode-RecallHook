@@ -17,6 +17,13 @@ class Candidate:
     score: float
     source: str          
     keyword: str = ""    
+    
+    
+    specificity: float = 1.0
+    
+    
+    
+    routes: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -29,6 +36,8 @@ class Result:
     
     
     route_ranks: dict[int, dict[str, int]] = field(default_factory=dict)
+    
+    specific_floor: float = 0.6
 
     @property
     def empty(self) -> bool:
@@ -42,7 +51,7 @@ class Result:
         if len(self.route_ranks.get(top.file_id, {})) >= 2:
             return "high"
         if top.source == "trigger":
-            return "high"
+            return "high" if top.specificity >= self.specific_floor else "medium"
         if top.source in ("vector", "tfidf"):
             return "medium"
         return "low"
@@ -58,7 +67,8 @@ class SkipStrategy(Exception):
     ""
 
 
-def _candidate(item: dict, score: float, source: str, keyword: str = "") -> Candidate:
+def _candidate(item: dict, score: float, source: str, keyword: str = "",
+               specificity: float = 1.0) -> Candidate:
     return Candidate(
         file_id=int(item["id"]),
         path=item["path"],
@@ -68,7 +78,28 @@ def _candidate(item: dict, score: float, source: str, keyword: str = "") -> Cand
         score=score,
         source=source,
         keyword=keyword,
+        specificity=specificity,
     )
+
+
+def trigger_specificity(utterances, cohesion, context: dict) -> float:
+    ""
+    try:
+        count = int(utterances) if utterances is not None else 0
+    except (TypeError, ValueError):
+        return 1.0
+    if count < 2 or cohesion is None:
+        return 1.0
+
+    baseline = float(context.get("trigger_cohesion_baseline", 0.0))
+    pseudo = float(context.get("trigger_cohesion_pseudocount", 5.0))
+    delta_scale = float(context.get("trigger_specific_delta", 0.15))
+    if delta_scale <= 0:
+        return 1.0
+
+    shrunk = (count * float(cohesion) + pseudo * baseline) / (count + pseudo)
+    delta = shrunk - baseline
+    return max(0.3, min(1.0, 0.3 + 0.7 * (delta / delta_scale)))
 
 
 
@@ -76,7 +107,13 @@ def _candidate(item: dict, score: float, source: str, keyword: str = "") -> Cand
 def strategy_trigger(connection: sqlite3.Connection, query: str, context: dict) -> list[Candidate]:
     ""
     rows = store.search_triggers(connection, query)
-    return [_candidate(item, 1.0, "trigger", item.get("keyword", "")) for item in rows]
+    candidates = []
+    for item in rows:
+        score = trigger_specificity(item.get("utterances"), item.get("cohesion"), context)
+        candidates.append(
+            _candidate(item, score, "trigger", item.get("keyword", ""), score))
+    candidates.sort(key=lambda c: (-c.specificity, c.tier, c.path))
+    return candidates
 
 
 def strategy_ngram(connection: sqlite3.Connection, query: str, context: dict) -> list[Candidate]:
@@ -167,6 +204,9 @@ def rrf_fuse(lists: dict[str, list[Candidate]], k: int,
     scores: dict[int, float] = {}
     origin: dict[int, Candidate] = {}
     ranks: dict[int, dict[str, int]] = {}
+    
+    
+    raw: dict[int, dict[str, float]] = {}
     for name, items in lists.items():
         weight = float(weights.get(name, 1.0))
         seen: set[int] = set()
@@ -178,10 +218,12 @@ def rrf_fuse(lists: dict[str, list[Candidate]], k: int,
             seen.add(key)
             scores[key] = scores.get(key, 0.0) + weight / (k + rank + 1)
             ranks.setdefault(key, {})[name] = rank
+            raw.setdefault(key, {})[name] = float(candidate.score)
             
             origin.setdefault(key, candidate)
 
-    fused = [replace(origin[key], score=score) for key, score in scores.items()]
+    fused = [replace(origin[key], score=score, routes=raw.get(key, {}))
+             for key, score in scores.items()]
     
     fused.sort(key=lambda item: (store.TIER_RANK.get(item.tier, 9), -item.score, item.path))
     return fused, ranks
@@ -222,7 +264,8 @@ def retrieve(
     if limit:
         fused = fused[:limit]
     return Result(query=query, path_used="+".join(lists), candidates=fused,
-                  skipped=skipped, route_ranks=ranks)
+                  skipped=skipped, route_ranks=ranks,
+                  specific_floor=float(context.get("trigger_specific_floor", 0.6)))
 
 
 def build_context(config: dict, connection: sqlite3.Connection, embedder=None) -> dict:
@@ -256,6 +299,20 @@ def build_context(config: dict, connection: sqlite3.Connection, embedder=None) -
             "tfidf": float(retrieval.get("weight_vector", 0.6)),
         },
         "injection_max_lines": int(store.get_meta(connection, "injection_max_lines", "5")),
+        
+        
+        "trigger_cohesion_baseline": float(
+            store.get_meta(connection, "trigger_cohesion_baseline", "0.0") or 0.0
+        ),
+        "trigger_cohesion_pseudocount": float(
+            store.get_meta(connection, "trigger_cohesion_pseudocount", "5") or 5
+        ),
+        "trigger_specific_delta": float(
+            store.get_meta(connection, "trigger_specific_delta", "0.15") or 0.15
+        ),
+        "trigger_specific_floor": float(
+            store.get_meta(connection, "trigger_specific_floor", "0.6") or 0.6
+        ),
     }
     if embedder is not None:
         context["embedder"] = embedder

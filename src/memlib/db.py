@@ -9,7 +9,7 @@ MAIN_DIR = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schema.sql"
 DEFAULT_CONFIG_PATH = MAIN_DIR / "config.toml"
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 MIGRATIONS: dict[int, list[str]] = {
@@ -108,6 +108,23 @@ MIGRATIONS: dict[int, list[str]] = {
         
         "ALTER TABLE candidate_cards ADD COLUMN duplicate_of INTEGER "
         "REFERENCES candidate_cards(id)",
+    ],
+    13: [
+        
+        
+        
+        
+        
+        "ALTER TABLE triggers ADD COLUMN utterances INTEGER",
+        "ALTER TABLE triggers ADD COLUMN cohesion REAL",
+        "INSERT INTO meta(key,value) VALUES('trigger_cohesion_baseline','0.0') "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        "INSERT INTO meta(key,value) VALUES('trigger_cohesion_pseudocount','5') "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        "INSERT INTO meta(key,value) VALUES('trigger_specific_delta','0.15') "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        "INSERT INTO meta(key,value) VALUES('trigger_specific_floor','0.6') "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
     ],
 }
 

@@ -346,8 +346,70 @@ def retire_qwen_triggers(connection: sqlite3.Connection, file_id: int,
     return cursor.rowcount
 
 
-def upsert_trigger(connection: sqlite3.Connection, file_id: int, keyword: str,
-                   source: str, status: str, reason: str | None = None) -> None:
+
+
+ARCHIVE_PREFIX = "归档："
+
+
+def retire_keyword(connection: sqlite3.Connection, keyword: str, reason: str) -> int:
+    ""
+    cursor = connection.execute(
+        "UPDATE triggers SET status='rejected', reason=? WHERE keyword=?",
+        (ARCHIVE_PREFIX + reason, keyword),
+    )
+    return cursor.rowcount
+
+
+def retired_keywords(connection: sqlite3.Connection) -> set[str]:
+    ""
+    rows = connection.execute(
+        "SELECT DISTINCT keyword FROM triggers WHERE reason LIKE ?",
+        (ARCHIVE_PREFIX + "%",),
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
+def retired_rows(connection: sqlite3.Connection) -> list[dict]:
+    ""
+    return [
+        {"keyword": row[0], "file": row[1], "reason": (row[2] or "")[len(ARCHIVE_PREFIX):]}
+        for row in connection.execute(
+            "SELECT t.keyword, f.name, t.reason FROM triggers t "
+            "JOIN files f ON f.id=t.file_id "
+            "WHERE t.reason LIKE ? ORDER BY t.keyword, f.name",
+            (ARCHIVE_PREFIX + "%",),
+        )
+    ]
+
+
+def card_turns(connection: sqlite3.Connection, card_id: int) -> list[dict]:
+    ""
+    return [
+        dict(zip(("id", "session_id", "role", "ts", "text"), row))
+        for row in connection.execute(
+            "SELECT id, session_id, role, ts, text FROM turns "
+            "WHERE card_id=? ORDER BY id",
+            (card_id,),
+        )
+    ]
+
+
+def cards_all(connection: sqlite3.Connection) -> list[dict]:
+    return [
+        dict(zip(("id", "topic", "classification", "snippet"), row))
+        for row in connection.execute(
+            "SELECT id, topic, classification, snippet FROM candidate_cards ORDER BY id"
+        )
+    ]
+
+
+def set_card_snippet(connection: sqlite3.Connection, card_id: int,
+                     snippet: str | None) -> None:
+    connection.execute(
+        "UPDATE candidate_cards SET snippet=? WHERE id=?", (snippet, card_id))
+
+
+def upsert_trigger(connection: sqlite3.Connection, file_id: int, keyword: str,                   source: str, status: str, reason: str | None = None) -> None:
     connection.execute(
         "INSERT INTO triggers(file_id, keyword, source, status, reason) "
         "VALUES(?,?,?,?,?) "
@@ -411,16 +473,20 @@ def replace_see_also(connection: sqlite3.Connection, file_id: int,
 def search_triggers(connection: sqlite3.Connection, normalized_prompt: str) -> list[dict]:
     ""
     rows = connection.execute(
-        f"SELECT {qualified()}, t.keyword FROM triggers t JOIN files f ON f.id=t.file_id "
+        f"SELECT {qualified()}, t.keyword, t.utterances, t.cohesion "
+        f"FROM triggers t JOIN files f ON f.id=t.file_id "
         f"WHERE {_tier_clause('f.tier', TRIGGER_TIERS)} AND f.missing_since IS NULL "
         "AND t.status='active' AND instr(?, t.keyword) > 0 "
         "ORDER BY f.tier, f.path",
         (normalized_prompt,),
     ).fetchall()
+    width = len(FILE_COLUMNS.split(","))
     results = []
     for row in rows:
-        item = row_to_dict(row[:len(FILE_COLUMNS.split(","))])
-        item["keyword"] = row[-1]
+        item = row_to_dict(row[:width])
+        item["keyword"] = row[width]
+        item["utterances"] = row[width + 1]
+        item["cohesion"] = row[width + 2]
         results.append(item)
     return results
 

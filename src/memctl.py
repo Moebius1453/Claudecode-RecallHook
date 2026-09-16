@@ -8,7 +8,7 @@ import textwrap
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from memlib import db, embed, frontmatter, retrieve, store
+from memlib import db, embed, frontmatter, retrieve, store, text
 
 
 def _open(args):
@@ -71,8 +71,13 @@ def cmd_query(connection, args) -> int:
     print(f"命中 {len(result.candidates)} 条，走过 {result.path_used}：")
     for candidate in result.candidates:
         keyword = f" «{candidate.keyword}»" if candidate.keyword else ""
+        
+        routes = " ".join(f"{name}={score:.2f}"
+                          for name, score in sorted(getattr(candidate, "routes", {}).items()))
         print(f"  [{candidate.tier}/{candidate.source} {candidate.score:.3f}]{keyword} "
               f"{candidate.name} — {candidate.description}")
+        if routes:
+            print(f"      路原始分：{routes}")
     return 0
 
 
@@ -91,6 +96,40 @@ def cmd_files(connection, args) -> int:
         flag = " [缺失]" if row["missing_since"] else ""
         print(f"  {row['tier']:<8} {row['kind']:<9} {row['name']}{flag}")
     print(f"共 {len(rows)} 行")
+    return 0
+
+
+def cmd_retired(connection, args) -> int:
+    ""
+    rows = store.retired_rows(connection)
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return 0
+    if not rows:
+        print("归档区是空的。用 `memctl retire <词> <原因>` 归档一个触发词。")
+        return 0
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        grouped.setdefault(row["keyword"], []).append(row)
+    print(f"已归档 {len(grouped)} 个触发词（共 {len(rows)} 行）——"
+          f"不再被检索，也不会被重新生成：")
+    for keyword, items in sorted(grouped.items()):
+        files = "、".join(item["file"] for item in items)
+        print(f"  {keyword:<10} {items[0]['reason']:<24} 曾属于：{files}")
+    return 0
+
+
+def cmd_retire(connection, args) -> int:
+    keyword = text.normalize_keyword(" ".join(args.keyword))
+    if not keyword:
+        print("触发词不能为空", file=sys.stderr)
+        return 1
+    affected = store.retire_keyword(connection, keyword, " ".join(args.reason))
+    if not affected:
+        print(f"没有触发词叫「{keyword}」——没有可归档的行", file=sys.stderr)
+        return 1
+    connection.commit()
+    print(f"已归档「{keyword}」（{affected} 行）；不再被检索，也不会被重新生成。")
     return 0
 
 
@@ -192,6 +231,10 @@ def cmd_cards(connection, args) -> int:
             text = (head["summary"] or "").strip()
             if text:
                 print(textwrap.fill(text, 96, initial_indent="    ",
+                                    subsequent_indent="    "))
+            evidence = (head.get("snippet") or "").strip()
+            if evidence:
+                print(textwrap.fill(f"原文: {evidence}", 96, initial_indent="    ",
                                     subsequent_indent="    "))
             if head["why"]:
                 print(textwrap.fill(f"为什么记: {head['why']}", 96,
@@ -299,6 +342,15 @@ def main() -> None:
     trigger_rm.add_argument("name")
     trigger_rm.add_argument("keywords", nargs="+")
 
+    retired = subparsers.add_parser(
+        "retired", help="归档区：已归档的触发词（不再检索、不再生成）")
+    retired.add_argument("--json", action="store_true")
+
+    retire = subparsers.add_parser(
+        "retire", help="归档一个触发词，等同于删除（08 §29）")
+    retire.add_argument("keyword", nargs="+")
+    retire.add_argument("reason", nargs="+")
+
     tier = subparsers.add_parser("tier-set", help="改档位并记 tier_events")
     tier.add_argument("name")
     tier.add_argument("tier", choices=list(store.TIER_RANK))
@@ -348,6 +400,10 @@ def main() -> None:
             code = cmd_trigger_edit(connection, args, add=True)
         elif args.command == "trigger-rm":
             code = cmd_trigger_edit(connection, args, add=False)
+        elif args.command == "retired":
+            code = cmd_retired(connection, args)
+        elif args.command == "retire":
+            code = cmd_retire(connection, args)
         elif args.command == "tier-set":
             code = cmd_tier_set(connection, args)
         elif args.command == "pin":

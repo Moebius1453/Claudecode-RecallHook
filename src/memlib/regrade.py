@@ -92,13 +92,27 @@ def plan(connection: sqlite3.Connection, *, now: datetime | None = None) -> dict
         stats["promoted"] += 1
 
     
+    
+    
+    
+    
+    
+    
+    
+    
     always = [row for row in rows if tiers[row["id"]] == "always"]
     if len(always) > cap:
         
-        always.sort(key=lambda row: (int(row["inject_count"] or 0),
-                                     row["last_injected_at"] is not None,
-                                     row["path"]))
-        for row in always[: len(always) - cap]:
+        evictable = [row for row in always if row["id"] not in frozen]
+        evictable.sort(key=lambda row: (int(row["inject_count"] or 0),
+                                        row["last_injected_at"] is not None,
+                                        row["path"]))
+        need = len(always) - cap
+        if len(evictable) < need:
+            
+            
+            stats["cap_stuck"] = need - len(evictable)
+        for row in evictable[:need]:
             changes.append(Change(row["id"], row["name"], "always", "warm",
                                   "cap_eviction",
                                   f"always 超编 {len(always)}/{cap}，用量最低"))
