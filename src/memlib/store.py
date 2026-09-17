@@ -382,6 +382,21 @@ def retired_rows(connection: sqlite3.Connection) -> list[dict]:
     ]
 
 
+def set_card_status(connection: sqlite3.Connection,
+                    card_ids: list[int], status: str) -> int:
+    ""
+    if status not in ("reviewed", "written", "discarded"):
+        raise ValueError(f"不认识的卡片状态：{status!r}")
+    if not card_ids:
+        return 0
+    marks = ",".join("?" for _ in card_ids)
+    cursor = connection.execute(
+        f"UPDATE candidate_cards SET status=? WHERE id IN ({marks})",
+        (status, *card_ids),
+    )
+    return cursor.rowcount
+
+
 def card_turns(connection: sqlite3.Connection, card_id: int) -> list[dict]:
     ""
     return [
@@ -782,7 +797,7 @@ def pending_cards(connection: sqlite3.Connection, *, include_discard: bool = Fal
                "classification, status, duplicate_of")
     clauses = []
     if not include_written:
-        clauses.append("status <> 'written'")
+        clauses.append("status NOT IN ('written','reviewed')")
     if not include_discard:
         clauses.append("classification <> 'discard'")
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""

@@ -133,6 +133,17 @@ def cmd_retire(connection, args) -> int:
     return 0
 
 
+def cmd_card_status(connection, args) -> int:
+    ""
+    ids = [int(value) for value in args.ids]
+    affected = store.set_card_status(connection, ids, args.status)
+    connection.commit()
+    print(f"标记 {affected}/{len(ids)} 张为 {args.status}")
+    if affected != len(ids):
+        print("（对不上的 id 可能不存在——用 `memctl cards` 确认卡号）", file=sys.stderr)
+    return 0
+
+
 def cmd_triggers(connection, args) -> int:
     if args.name:
         found = _resolve_file(connection, args.name)
@@ -342,6 +353,12 @@ def main() -> None:
     trigger_rm.add_argument("name")
     trigger_rm.add_argument("keywords", nargs="+")
 
+    card_status = subparsers.add_parser(
+        "card-status", help="标记候选卡处理结果（排水用）")
+    card_status.add_argument("ids", nargs="+", help="卡号，可给多个")
+    card_status.add_argument("--status", required=True,
+                             choices=["reviewed", "written", "discarded"])
+
     retired = subparsers.add_parser(
         "retired", help="归档区：已归档的触发词（不再检索、不再生成）")
     retired.add_argument("--json", action="store_true")
@@ -400,6 +417,8 @@ def main() -> None:
             code = cmd_trigger_edit(connection, args, add=True)
         elif args.command == "trigger-rm":
             code = cmd_trigger_edit(connection, args, add=False)
+        elif args.command == "card-status":
+            code = cmd_card_status(connection, args)
         elif args.command == "retired":
             code = cmd_retired(connection, args)
         elif args.command == "retire":
