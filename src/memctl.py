@@ -144,6 +144,32 @@ def cmd_card_status(connection, args) -> int:
     return 0
 
 
+def cmd_hidden(connection, args) -> int:
+    ""
+    rows = store.hidden_files(connection)
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return 0
+    if not rows:
+        print("没有归档/沉档/缺失的记忆。")
+        return 0
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        key = "缺失（文件没了，行还在）" if row["missing_since"] else {
+            "archived": "归档（检索完全看不到）",
+            "resting": "沉档（只走触发词，走向量不行）",
+        }.get(row["tier"], row["tier"])
+        grouped.setdefault(key, []).append(row)
+    print(f"检索之外有 {len(rows)} 份记忆。**用户点名时照 path 直接读**，别答'没有'：\n")
+    for key, items in grouped.items():
+        print(f"── {key}")
+        for row in items:
+            print(f"  {row['name']:<28} {row['path']}")
+            if row["description"]:
+                print(f"      {row['description'][:78]}")
+    return 0
+
+
 def cmd_triggers(connection, args) -> int:
     if args.name:
         found = _resolve_file(connection, args.name)
@@ -359,6 +385,10 @@ def main() -> None:
     card_status.add_argument("--status", required=True,
                              choices=["reviewed", "written", "discarded"])
 
+    hidden = subparsers.add_parser(
+        "hidden", help="检索看不到的记忆（归档/沉档/缺失）—— 别忘记它们存在")
+    hidden.add_argument("--json", action="store_true")
+
     retired = subparsers.add_parser(
         "retired", help="归档区：已归档的触发词（不再检索、不再生成）")
     retired.add_argument("--json", action="store_true")
@@ -419,6 +449,8 @@ def main() -> None:
             code = cmd_trigger_edit(connection, args, add=False)
         elif args.command == "card-status":
             code = cmd_card_status(connection, args)
+        elif args.command == "hidden":
+            code = cmd_hidden(connection, args)
         elif args.command == "retired":
             code = cmd_retired(connection, args)
         elif args.command == "retire":

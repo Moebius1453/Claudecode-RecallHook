@@ -382,6 +382,18 @@ def retired_rows(connection: sqlite3.Connection) -> list[dict]:
     ]
 
 
+def hidden_files(connection: sqlite3.Connection) -> list[dict]:
+    ""
+    return [
+        dict(zip(("name", "tier", "kind", "description", "path", "missing_since"), row))
+        for row in connection.execute(
+            "SELECT name, tier, kind, description, path, missing_since FROM files "
+            "WHERE tier IN ('resting','archived') OR missing_since IS NOT NULL "
+            "ORDER BY tier, name"
+        )
+    ]
+
+
 def set_card_status(connection: sqlite3.Connection,
                     card_ids: list[int], status: str) -> int:
     ""
