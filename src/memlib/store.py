@@ -14,7 +14,15 @@ FILE_COLUMNS = (
 TIER_RANK = {"always": 0, "warm": 1, "resting": 2, "archived": 3}
 
 
-TRIGGER_TIERS = ("always", "warm", "resting")
+
+
+
+
+
+
+
+
+TRIGGER_TIERS = ("warm", "resting")
 FUZZY_TIERS = ("warm",)
 
 
