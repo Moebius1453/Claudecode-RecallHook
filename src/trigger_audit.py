@@ -166,8 +166,13 @@ def main() -> None:
               f"{item['top3_rate']:>8.2f}{item['mean_corrected']:>9.3f}")
 
     print("\n判读：**归属可疑** = 这些发言实际指向的是另一个文件 ⇒ 该改归属，不是归档。")
-    print("      没标的 = 发言指向散乱 ⇒ 该词本身泛化，考虑 `memctl retire`。")
-    print("      **本工具只把 187 缩到 23，剩下那步是人做的**（§39：判据不能自动归档）。")
+    print("      没标的 = 发言指向散乱 ⇒ 该词本身泛化，**考虑**归档。")
+    print()
+    print("⚠️ **别整批归档！** 实测 2026-09-17：按本表把 16 个嫌疑词一次处理掉，")
+    print('   检索基线从 **15/18 掉到 13/18** —— `led` 和 `会话` 正在承担真实查询')
+    print('   （"姿态检测的 led 灯" / "长会话是不是会变笨"）。')
+    print("   **每处理一批，立刻跑 python tests/test_retrieval_baseline.py。**")
+    print("   判错了用 `memctl unretire <词>` 撤回。")
 
 
 if __name__ == "__main__":

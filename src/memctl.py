@@ -133,6 +133,18 @@ def cmd_retire(connection, args) -> int:
     return 0
 
 
+def cmd_unretire(connection, args) -> int:
+    ""
+    keyword = text.normalize_keyword(" ".join(args.keyword))
+    affected = store.unretire_keyword(connection, keyword)
+    if not affected:
+        print(f"「{keyword}」不在归档区，没什么可撤的", file=sys.stderr)
+        return 1
+    connection.commit()
+    print(f"已撤归档「{keyword}」（{affected} 行）；原归档原因留在 reason 里备查。")
+    return 0
+
+
 def cmd_card_status(connection, args) -> int:
     ""
     ids = [int(value) for value in args.ids]
@@ -379,6 +391,9 @@ def main() -> None:
     trigger_rm.add_argument("name")
     trigger_rm.add_argument("keywords", nargs="+")
 
+    unretire = subparsers.add_parser("unretire", help="撤归档（归档没有撤销口是 §39 的教训）")
+    unretire.add_argument("keyword", nargs="+")
+
     card_status = subparsers.add_parser(
         "card-status", help="标记候选卡处理结果（排水用）")
     card_status.add_argument("ids", nargs="+", help="卡号，可给多个")
@@ -447,6 +462,8 @@ def main() -> None:
             code = cmd_trigger_edit(connection, args, add=True)
         elif args.command == "trigger-rm":
             code = cmd_trigger_edit(connection, args, add=False)
+        elif args.command == "unretire":
+            code = cmd_unretire(connection, args)
         elif args.command == "card-status":
             code = cmd_card_status(connection, args)
         elif args.command == "hidden":

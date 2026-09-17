@@ -409,6 +409,17 @@ def hidden_files(connection: sqlite3.Connection) -> list[dict]:
     ]
 
 
+def unretire_keyword(connection: sqlite3.Connection, keyword: str) -> int:
+    ""
+    cursor = connection.execute(
+        "UPDATE triggers SET status='active', "
+        "reason='[已撤归档] ' || coalesce(reason,'') "
+        "WHERE keyword=? AND reason LIKE ? AND status='rejected'",
+        (keyword, ARCHIVE_PREFIX + "%"),
+    )
+    return cursor.rowcount
+
+
 def set_card_status(connection: sqlite3.Connection,
                     card_ids: list[int], status: str) -> int:
     ""
