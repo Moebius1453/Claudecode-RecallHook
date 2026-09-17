@@ -123,11 +123,12 @@ def strategy_ngram(connection: sqlite3.Connection, query: str, context: dict) ->
     if not query_grams:
         return []
     threshold = float(context.get("ngram_threshold", 0.5))
+    min_shared = int(context.get("ngram_min_shared", 2))
     found = []
     for item in store.retrievable_docs(connection):
         text = f"{item['name']} {item['description'] or ''}"
         shared = query_grams & set(ngrams(text, n=size))
-        if not shared:
+        if len(shared) < min_shared:
             continue
         score = len(shared) / len(query_grams)
         if score >= threshold:

@@ -283,20 +283,35 @@ def replace_triggers(connection: sqlite3.Connection, file_id: int,
 
 def add_triggers(connection: sqlite3.Connection, file_id: int,
                  keywords: list[str]) -> tuple[list[str], list[str]]:
+    ""
     added, rejected = [], []
+    
+    
+    
+    
+    
+    retired = retired_keywords(connection)
     for keyword in keywords:
         reason = keyword_reject_reason(keyword)
         if reason:
             rejected.append(f"{keyword}（{reason}）")
             continue
         keyword = normalize_keyword(keyword)
+        if keyword in retired:
+            rejected.append(f"{keyword}（已归档，要复活先撤归档）")
+            continue
         cursor = connection.execute(
-            "INSERT OR IGNORE INTO triggers(file_id, keyword, source) "
-            "VALUES(?,?,'manual')",
-            (file_id, keyword),
+            "INSERT INTO triggers(file_id, keyword, source, status, reason) "
+            "VALUES(?,?,'manual','active',NULL) "
+            "ON CONFLICT(file_id, keyword) DO UPDATE SET "
+            "status='active', reason=NULL "
+            "WHERE triggers.reason IS NULL OR triggers.reason NOT LIKE ?",
+            (file_id, keyword, ARCHIVE_PREFIX + "%"),
         )
         if cursor.rowcount:
             added.append(keyword)
+        else:
+            rejected.append(f"{keyword}（已归档，要复活先撤归档）")
     return added, rejected
 
 
@@ -809,7 +824,11 @@ def pending_cards(connection: sqlite3.Connection, *, include_discard: bool = Fal
                "classification, status, duplicate_of")
     clauses = []
     if not include_written:
-        clauses.append("status NOT IN ('written','reviewed')")
+        
+        
+        
+        
+        clauses.append("status NOT IN ('written','reviewed','discarded')")
     if not include_discard:
         clauses.append("classification <> 'discard'")
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
