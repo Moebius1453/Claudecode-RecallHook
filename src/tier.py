@@ -88,7 +88,10 @@ def main() -> None:
 
     if args.json:
         import json
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        from dataclasses import asdict
+        
+        
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=asdict))
         return
 
     if "init" in result:

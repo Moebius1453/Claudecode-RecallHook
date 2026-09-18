@@ -13,16 +13,24 @@ TYPE_TO_KIND = {
 
 
 
-KIND_TO_TIER = {
-    "rule": "always",
-    "profile": "always",
-    "project": "warm",
-    "know-how": "warm",
-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+DEFAULT_TIER = "warm"
 
 
 def tier_for_kind(kind: str) -> str:
-    return KIND_TO_TIER.get(kind, "warm")
+    return DEFAULT_TIER
 
 VALID_KINDS = {"rule", "profile", "project", "know-how"}
 VALID_STATUS = {"active", "waiting", "resting", "archived", "deprecated"}
