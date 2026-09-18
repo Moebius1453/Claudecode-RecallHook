@@ -71,11 +71,19 @@ def pid_running(pid: int) -> bool:
     return result.stdout.strip().lower() == "true"
 
 
+def pick(args) -> dict:
+    ""
+    if not args.only:
+        return SERVICES
+    return {name: SERVICES[name] for name in args.only}
+
+
 def cmd_start(args) -> int:
     state = load_state()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    chosen = pick(args)
     started = 0
-    for name, (command, health) in SERVICES.items():
+    for name, (command, health) in chosen.items():
         if alive(health):
             print(f"  {name:<6} 已在跑，跳过")
             continue
@@ -90,7 +98,7 @@ def cmd_start(args) -> int:
         print(f"  {name:<6} 已启动 PID {process.pid}（日志 logs/{name}.log）")
     save_state(state)
 
-    for name, (_, health) in SERVICES.items():
+    for name, (_, health) in chosen.items():
         for _ in range(int(args.wait / 2)):
             if alive(health):
                 print(f"  {name:<6} 就绪")
@@ -140,6 +148,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="本地模型服务启停（脱离 agent 进程树）。")
     parser.add_argument("action", choices=("start", "stop", "status"))
     parser.add_argument("--wait", type=int, default=90, help="启动后等多久就绪")
+    parser.add_argument("--only", action="append", choices=tuple(SERVICES),
+                        help="只起指定的服务（可重复）；不给就是全部")
     parser.add_argument("--all", action="store_true",
                         help="stop 时按进程名停掉所有 llama-server")
     args = parser.parse_args()
