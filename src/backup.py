@@ -4,6 +4,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -19,7 +20,26 @@ BACKUP_ROOT = WORKSPACE / "备份"
 CLAUDE_HOME = Path.home() / ".claude"
 
 
+SNAPSHOT_RE = re.compile(r"^\d{8}-\d{6}(-.*)?$")
+
+
 SKIP_DIRS = {"__pycache__", "data", "models", "logs", ".git", "tmp"}
+
+
+def prune(root: Path, keep: int, *, protect: Path) -> list[str]:
+    ""
+    if keep <= 0:
+        return []
+    candidates = sorted(
+        (d for d in root.iterdir() if d.is_dir() and SNAPSHOT_RE.match(d.name)),
+        key=lambda d: d.name,
+    )
+    if len(candidates) <= keep:
+        return []
+    doomed = [d for d in candidates[:len(candidates) - keep] if d != protect]
+    for d in doomed:
+        shutil.rmtree(d)
+    return [d.name for d in doomed]
 
 
 def _stamp() -> str:
@@ -64,17 +84,17 @@ def copy_tree(source: Path, target: Path, *, skip: set[str] = frozenset()) -> in
     return count
 
 
-def run(label: str | None) -> Path:
+def run(label: str | None, root: Path | None = None) -> Path:
     config = db.load_config()
     db_path = db.resolve_path(config["db"]["path"])
     memory_dir = None
-    for root in config.get("corpus", []):
-        if root.get("label") == "memory":
-            memory_dir = Path(root["path"])
+    for root_cfg in config.get("corpus", []):
+        if root_cfg.get("label") == "memory":
+            memory_dir = Path(root_cfg["path"])
             break
 
     name = "-".join(part for part in (_stamp(), label) if part)
-    target = BACKUP_ROOT / name
+    target = (root or BACKUP_ROOT) / name
     if target.exists():
         raise SystemExit(f"备份目录已存在：{target}")
     target.mkdir(parents=True)
@@ -143,15 +163,23 @@ def run(label: str | None) -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description="变更前快照（DB + memory + 配置 + 代码）")
     parser.add_argument("--label", default=None, help="给快照起个名，如 上电前")
+    parser.add_argument("--root", default=None,
+                        help=f"备份根目录（默认 {BACKUP_ROOT}）。跨盘留第二份副本时用它")
+    parser.add_argument("--keep", type=int, default=0,
+                        help="在 --root 下只保留最新 N 份快照（0=不轮换，默认）")
     args = parser.parse_args()
+    root = Path(args.root) if args.root else None
     try:
-        target = run(args.label)
+        target = run(args.label, root)
+        removed = prune(root or BACKUP_ROOT, args.keep, protect=target)
     except Exception as error:  
         raise SystemExit(f"备份失败：{type(error).__name__}: {error}")
     print(f"快照已存：{target}")
     for line in (target / "MANIFEST.md").read_text(encoding="utf-8").splitlines():
         if line.startswith("| `"):
             print("  " + line)
+    if removed:
+        print(f"轮换：删除 {len(removed)} 份旧快照 —— {', '.join(removed)}")
 
 
 if __name__ == "__main__":
