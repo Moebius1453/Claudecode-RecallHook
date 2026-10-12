@@ -19,6 +19,8 @@ Retrieval returns file-level pointers. Claude reads the source text as needed. T
 
 ## Requirements
 
+This README covers basic indexing of existing Markdown notes and hook integration. Model preparation, transcript capture, candidate review, and tier synchronization are not yet documented as a complete deployment flow from an empty environment. This release has not been validated in a separate clean environment.
+
 Basic indexing and keyword retrieval require Python 3.11 or later, plus NumPy and PyYAML from `requirements.txt`. The code uses `tomllib`, which is not included in Python 3.10.
 
 Vector retrieval requires a compatible local embedding service. The example uses `bge-small-zh-v1.5` with 512 dimensions. Candidate screening and automatic trigger generation require a separate local generation service. Model files and llama.cpp are installed separately.
@@ -31,7 +33,7 @@ Start with indexing and retrieval for existing Markdown notes. Transcript captur
 
 1. Copy `config.example.toml` to `config.toml` at the repository root. Back up an existing configuration before replacing it.
 2. Set `path` in `[[corpus]]` to your notes directory and make sure `[db].path` points to a new database.
-3. Relative paths are resolved against the repository root, not the terminal's current directory. The example's `memory` path refers to `memory/` inside the repository. Absolute paths are also supported.
+3. Relative paths in `[db].path` and `[services]` are resolved against the repository root. `[[corpus]].path` is currently passed directly to the filesystem, so a relative corpus path depends on the process working directory. Hooks usually run in the project being used, so use absolute corpus paths for hook integration. The example's `memory` path works only when commands run from this repository root.
 4. Run these PowerShell commands from the repository root:
 
 ```powershell
