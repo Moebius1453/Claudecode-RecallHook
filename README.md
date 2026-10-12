@@ -1,5 +1,7 @@
 # Claudecode-RecallHook
 
+中文 | [English](README.en.md)
+
 面向 Claude Code 的本地 Markdown 记忆召回工具。通过 `UserPromptSubmit` hook 检索与当前输入相关的笔记，附加文件路径和简短描述，供 Claude 按需阅读原文。
 
 支持中文笔记索引、多路检索、注入预算和记忆档位管理。部署时需要配置语料目录、初始化数据库，并添加 hook。
