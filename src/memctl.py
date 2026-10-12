@@ -1,0 +1,493 @@
+""
+
+import argparse
+from pathlib import Path
+import json
+import sys
+import textwrap
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from memlib import db, embed, frontmatter, retrieve, store, text
+
+
+def _open(args):
+    config = db.load_config(args.config)
+    db_path = args.db or db.resolve_path(config["db"]["path"])
+    db.ensure_schema(db_path)
+    return config, db.connect(db_path)
+
+
+def _resolve_file(connection, name: str) -> dict | None:
+    return store.find_file_by_name(connection, name)
+
+
+def cmd_status(connection, args) -> int:
+    info = store.status(connection)
+    if args.json:
+        print(json.dumps(info, ensure_ascii=False, indent=2))
+        return 0
+    print(f"schema v{info['schema_version']}｜文件 {info['files_total']}"
+          f"（缺失 {info['files_missing']}）")
+    print(f"档位 {info['by_tier']}")
+    print(f"类型 {info['by_kind']}")
+    print(f"无 description {info['files_no_description']}｜"
+          f"无向量 {info['files_no_vector']}｜"
+          f"无触发词 {info['files_no_trigger']}｜"
+          f"触发词 {info['triggers_total']} {info['triggers_by_source']}")
+    turns = info["turns"]
+    if turns["total"]:
+        print(f"轮次 待筛 {turns['new']}｜已筛 {turns['screened']}｜丢弃 {turns['discarded']}")
+    print(f"待排水候选卡 {info['cards_new']}｜向量模型 {info['embed_model'] or '（未嵌入过）'}")
+    return 0
+
+
+def cmd_query(connection, args) -> int:
+    config = args._config
+    embedder = None if args.no_embed else embed.get_embedder(config)
+    context = retrieve.build_context(config, connection, embedder)
+    if args.order:
+        context["order"] = args.order.split(",")
+    result = retrieve.retrieve(
+        connection, " ".join(args.text), context=context, limit=args.limit
+    )
+    for reason in result.skipped:
+        print(f"[skip] {reason}", file=sys.stderr)
+
+    if args.json:
+        print(json.dumps(
+            {
+                "query": result.query,
+                "path_used": result.path_used,
+                "candidates": [candidate.__dict__ for candidate in result.candidates],
+            },
+            ensure_ascii=False, indent=2,
+        ))
+        return 0
+
+    if result.empty:
+        print(f"无命中（走了 {result.path_used}）")
+        return 0
+    print(f"命中 {len(result.candidates)} 条，走过 {result.path_used}：")
+    for candidate in result.candidates:
+        keyword = f" «{candidate.keyword}»" if candidate.keyword else ""
+        
+        routes = " ".join(f"{name}={score:.2f}"
+                          for name, score in sorted(getattr(candidate, "routes", {}).items()))
+        print(f"  [{candidate.tier}/{candidate.source} {candidate.score:.3f}]{keyword} "
+              f"{candidate.name} — {candidate.description}")
+        if routes:
+            print(f"      路原始分：{routes}")
+    return 0
+
+
+def cmd_files(connection, args) -> int:
+    rows = store.list_files(
+        connection, tier=args.tier, kind=args.kind, status=args.status,
+        missing_only=args.missing, limit=args.limit,
+    )
+    if args.json:
+        print(json.dumps(
+            [{key: value for key, value in row.items() if key != "desc_vector"} for row in rows],
+            ensure_ascii=False, indent=2,
+        ))
+        return 0
+    for row in rows:
+        flag = " [缺失]" if row["missing_since"] else ""
+        print(f"  {row['tier']:<8} {row['kind']:<9} {row['name']}{flag}")
+    print(f"共 {len(rows)} 行")
+    return 0
+
+
+def cmd_retired(connection, args) -> int:
+    ""
+    rows = store.retired_rows(connection)
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return 0
+    if not rows:
+        print("归档区是空的。用 `memctl retire <词> <原因>` 归档一个触发词。")
+        return 0
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        grouped.setdefault(row["keyword"], []).append(row)
+    print(f"已归档 {len(grouped)} 个触发词（共 {len(rows)} 行）——"
+          f"不再被检索，也不会被重新生成：")
+    for keyword, items in sorted(grouped.items()):
+        files = "、".join(item["file"] for item in items)
+        print(f"  {keyword:<10} {items[0]['reason']:<24} 曾属于：{files}")
+    return 0
+
+
+def cmd_retire(connection, args) -> int:
+    keyword = text.normalize_keyword(" ".join(args.keyword))
+    if not keyword:
+        print("触发词不能为空", file=sys.stderr)
+        return 1
+    affected = store.retire_keyword(connection, keyword, " ".join(args.reason))
+    if not affected:
+        print(f"没有触发词叫「{keyword}」——没有可归档的行", file=sys.stderr)
+        return 1
+    connection.commit()
+    print(f"已归档「{keyword}」（{affected} 行）；不再被检索，也不会被重新生成。")
+    return 0
+
+
+def cmd_unretire(connection, args) -> int:
+    ""
+    keyword = text.normalize_keyword(" ".join(args.keyword))
+    affected = store.unretire_keyword(connection, keyword)
+    if not affected:
+        print(f"「{keyword}」不在归档区，没什么可撤的", file=sys.stderr)
+        return 1
+    connection.commit()
+    print(f"已撤归档「{keyword}」（{affected} 行）；原归档原因留在 reason 里备查。")
+    return 0
+
+
+def cmd_card_status(connection, args) -> int:
+    ""
+    ids = [int(value) for value in args.ids]
+    affected = store.set_card_status(connection, ids, args.status)
+    connection.commit()
+    print(f"标记 {affected}/{len(ids)} 张为 {args.status}")
+    if affected != len(ids):
+        print("（对不上的 id 可能不存在——用 `memctl cards` 确认卡号）", file=sys.stderr)
+    return 0
+
+
+def cmd_hidden(connection, args) -> int:
+    ""
+    rows = store.hidden_files(connection)
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return 0
+    if not rows:
+        print("没有归档/沉档/缺失的记忆。")
+        return 0
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        key = "缺失（文件没了，行还在）" if row["missing_since"] else {
+            "archived": "归档（检索完全看不到）",
+            "resting": "沉档（只走触发词，走向量不行）",
+        }.get(row["tier"], row["tier"])
+        grouped.setdefault(key, []).append(row)
+    print(f"检索之外有 {len(rows)} 份记忆。**用户点名时照 path 直接读**，别答'没有'：\n")
+    for key, items in grouped.items():
+        print(f"── {key}")
+        for row in items:
+            print(f"  {row['name']:<28} {row['path']}")
+            if row["description"]:
+                print(f"      {row['description'][:78]}")
+    return 0
+
+
+def cmd_triggers(connection, args) -> int:
+    if args.name:
+        found = _resolve_file(connection, args.name)
+        if found is None:
+            print(f"没有 name={args.name} 的文件", file=sys.stderr)
+            return 1
+        rows = store.list_trigger_rows(connection, found["id"])
+        if args.json:
+            print(json.dumps(
+                [{"keyword": w, "source": s, "status": st} for w, s, st in rows],
+                ensure_ascii=False))
+        elif not rows:
+            print("（无触发词）")
+        else:
+            print("  ".join(
+                f"{word}" + (f"[{source[:3]}]" if source != "frontmatter" else "")
+                + ("×" if status == "rejected" else "")
+                for word, source, status in rows
+            ))
+        return 0
+
+    if args.rejected:
+        rows = store.rejected_triggers(connection, limit=args.limit or 40)
+        if args.json:
+            print(json.dumps(
+                [{"file": f, "keyword": w, "reason": r} for f, w, r in rows],
+                ensure_ascii=False, indent=2))
+        else:
+            print(f"被拒候选（{len(rows)} 条，最多显示 {args.limit or 40}）：")
+            for name, word, reason in rows:
+                print(f"  {word:<10} {reason:<28} {name}")
+        return 0
+
+    missing = store.files_without_triggers(connection)
+    counts = store.trigger_counts(connection)
+    if args.json:
+        print(json.dumps({"missing": missing, "counts": counts}, ensure_ascii=False, indent=2))
+        return 0
+    print(f"触发词 {counts}")
+    print(f"无触发词的文件 {len(missing)} 个：")
+    for name in missing:
+        print(f"  {name}")
+    return 0
+
+
+def cmd_trigger_edit(connection, args, *, add: bool) -> int:
+    found = _resolve_file(connection, args.name)
+    if found is None:
+        print(f"没有 name={args.name} 的文件", file=sys.stderr)
+        return 1
+    added: list[str] = []
+    rejected: list[str] = []
+    if add:
+        added, rejected = store.add_triggers(connection, found["id"], args.keywords)
+        message = f"新增 {added}"
+    else:
+        message = f"删除 {store.remove_triggers(connection, found['id'], args.keywords)}"
+    if rejected:
+        message += f"｜被拒 {rejected}"
+    connection.commit()
+    print(f"{args.name}: {message}")
+    return 0
+
+
+def cmd_tier_set(connection, args) -> int:
+    found = _resolve_file(connection, args.name)
+    if found is None:
+        print(f"没有 name={args.name} 的文件", file=sys.stderr)
+        return 1
+    old = store.set_tier(connection, found["id"], args.tier, args.reason, args.actor)
+    connection.commit()
+    if old is None:
+        print(f"{args.name}: 已在 {args.tier}，未变更")
+    else:
+        print(f"{args.name}: {old} → {args.tier}（{args.reason}/{args.actor}）")
+    return 0
+
+
+def cmd_cards(connection, args) -> int:
+    ""
+    cards = store.pending_cards(connection, include_discard=args.discard,
+                                include_written=args.all_status)
+    if not cards:
+        print("没有待排水的候选卡")
+        return 0
+    clusters = store.card_clusters(connection, cards)
+    shown = clusters[: args.limit] if args.limit else clusters
+
+    print(f"待排水 {len(cards)} 张 → {len(clusters)} 簇"
+          + (f"（只显示前 {len(shown)} 簇）" if len(shown) < len(clusters) else ""))
+    print()
+    for head, members in shown:
+        note = f"  ↳ 另有 {len(members)} 张同一件事" if members else ""
+        print(f"#{head['id']} [{head['classification']}] {head['topic']}{note}")
+        if args.full:
+            text = (head["summary"] or "").strip()
+            if text:
+                print(textwrap.fill(text, 96, initial_indent="    ",
+                                    subsequent_indent="    "))
+            evidence = (head.get("snippet") or "").strip()
+            if evidence:
+                print(textwrap.fill(f"原文: {evidence}", 96, initial_indent="    ",
+                                    subsequent_indent="    "))
+            if head["why"]:
+                print(textwrap.fill(f"为什么记: {head['why']}", 96,
+                                    initial_indent="    ", subsequent_indent="    "))
+        if args.all and members:
+            for member in members:
+                print(f"    #{member['id']} [{member['classification']}] {member['topic']}")
+    return 0
+
+
+def cmd_pin(connection, args) -> int:
+    return _set_pinned(connection, args.name, True)
+
+
+def cmd_unpin(connection, args) -> int:
+    return _set_pinned(connection, args.name, False)
+
+
+def _set_pinned(connection, name: str, pinned: bool) -> int:
+    ""
+    found = _resolve_file(connection, name)
+    if found is None:
+        print(f"没有 name={name} 的文件", file=sys.stderr)
+        return 1
+    if not store.set_pinned(connection, found["id"], pinned):
+        print(f"{name}: 已经是{'锁' if pinned else '未锁'}状态，未变更")
+        return 0
+    store.log_tier_event(connection, found["id"], found["tier"], found["tier"],
+                         "pin" if pinned else "unpin", "user")
+    connection.commit()
+    print(f"{name}: {'已锁档（升降级将跳过它）' if pinned else '已解锁'}"
+          f"｜当前 {found['tier']}")
+    return 0
+
+
+def cmd_meta(connection, args) -> int:
+    ""
+    if args.key and args.value is not None:
+        store.set_meta(connection, args.key, args.value)
+        connection.commit()
+        print(f"{args.key} = {args.value}")
+        return 0
+    if args.key:
+        print(store.get_meta(connection, args.key) or "")
+        return 0
+    rows = connection.execute("SELECT key, value FROM meta ORDER BY key").fetchall()
+    for key, value in rows:
+        print(f"  {key:<28} {value}")
+    return 0
+
+
+def cmd_frontmatter_export(connection, args) -> int:
+    ""
+    rows = store.list_files(connection, limit=args.limit)
+    blocks = []
+    for row in rows:
+        meta = frontmatter.Meta(
+            name=row["name"],
+            description=row["description"] or "",
+            kind=row["kind"],
+            status=row["status"],
+            triggers=[word for word, _, status in
+                      store.list_trigger_rows(connection, row["id"])
+                      if status == "active"],
+        )
+        blocks.append(f"# {row['path']}\n" + frontmatter.render_frontmatter(meta))
+    print("\n\n".join(blocks))
+    return 0
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="记忆系统控制台。")
+    parser.add_argument("--config", type=Path, default=db.DEFAULT_CONFIG_PATH)
+    parser.add_argument("--db", type=Path, default=None)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    for name, help_text in (("status", "总览"), ("query", "检索")):
+        sub = subparsers.add_parser(name, help=help_text)
+        sub.add_argument("--json", action="store_true")
+        if name == "query":
+            sub.add_argument("text", nargs="+")
+            sub.add_argument("--limit", type=int, default=5)
+            sub.add_argument("--order", default="", help="覆盖策略顺序，如 trigger,fts")
+            sub.add_argument("--no-embed", action="store_true")
+
+    files = subparsers.add_parser("files", help="列出文件")
+    files.add_argument("--tier", choices=list(store.TIER_RANK))
+    files.add_argument("--kind", choices=["rule", "profile", "project", "know-how"])
+    files.add_argument("--status")
+    files.add_argument("--missing", action="store_true")
+    files.add_argument("--limit", type=int, default=0)
+    files.add_argument("--json", action="store_true")
+
+    triggers = subparsers.add_parser("triggers", help="触发词总览 / 单文件明细 / 被拒候选")
+    triggers.add_argument("name", nargs="?")
+    triggers.add_argument("--rejected", action="store_true", help="列出被闸门拒掉的候选")
+    triggers.add_argument("--limit", type=int, default=0)
+    triggers.add_argument("--json", action="store_true")
+
+    trigger_add = subparsers.add_parser("trigger-add", help="给文件加触发词（写 DB）")
+    trigger_add.add_argument("name")
+    trigger_add.add_argument("keywords", nargs="+")
+
+    trigger_rm = subparsers.add_parser("trigger-rm", help="删除触发词")
+    trigger_rm.add_argument("name")
+    trigger_rm.add_argument("keywords", nargs="+")
+
+    unretire = subparsers.add_parser("unretire", help="撤归档（归档没有撤销口是 §39 的教训）")
+    unretire.add_argument("keyword", nargs="+")
+
+    card_status = subparsers.add_parser(
+        "card-status", help="标记候选卡处理结果（排水用）")
+    card_status.add_argument("ids", nargs="+", help="卡号，可给多个")
+    card_status.add_argument("--status", required=True,
+                             choices=["reviewed", "written", "discarded"])
+
+    hidden = subparsers.add_parser(
+        "hidden", help="检索看不到的记忆（归档/沉档/缺失）—— 别忘记它们存在")
+    hidden.add_argument("--json", action="store_true")
+
+    retired = subparsers.add_parser(
+        "retired", help="归档区：已归档的触发词（不再检索、不再生成）")
+    retired.add_argument("--json", action="store_true")
+
+    retire = subparsers.add_parser(
+        "retire", help="归档一个触发词，等同于删除（08 §29）")
+    retire.add_argument("keyword", nargs="+")
+    retire.add_argument("reason", nargs="+")
+
+    tier = subparsers.add_parser("tier-set", help="改档位并记 tier_events")
+    tier.add_argument("name")
+    tier.add_argument("tier", choices=list(store.TIER_RANK))
+    tier.add_argument("--reason", default="manual",
+                      choices=["time", "frequency", "pin", "unpin", "manual", "cap_eviction"])
+    tier.add_argument("--actor", default="user", choices=["auto", "user", "agent"])
+
+    export = subparsers.add_parser("frontmatter-export", help="打印 frontmatter 片段（不写 md）")
+    export.add_argument("--limit", type=int, default=0)
+
+    pin = subparsers.add_parser("pin", help="锁档：升降级跳过它（01 §2 的撤销口）")
+    pin.add_argument("name")
+
+    unpin = subparsers.add_parser("unpin", help="解锁")
+    unpin.add_argument("name")
+
+    cards = subparsers.add_parser("cards", help="待排水候选卡（按簇看）")
+    cards.add_argument("--limit", type=int, default=20,
+                       help="最多显示几簇（0 = 全部）。默认 20，别把几百张倒进对话")
+    cards.add_argument("--full", action="store_true", help="带上摘要与理由")
+    cards.add_argument("--all", action="store_true", help="展开每个簇的成员")
+    cards.add_argument("--discard", action="store_true",
+                       help="包含模型判为 discard 的（抽查误判用）")
+    cards.add_argument("--all-status", action="store_true",
+                       help="包含已排水的（status='written'）")
+
+    meta = subparsers.add_parser("meta", help="查看/修改阈值（调参入口）")
+    meta.add_argument("key", nargs="?")
+    meta.add_argument("value", nargs="?")
+
+    args = parser.parse_args()
+    try:
+        config, connection = _open(args)
+    except (OSError, db.SchemaError, KeyError) as error:
+        parser.exit(1, f"memctl 失败：{error}\n")
+    args._config = config
+    try:
+        if args.command == "status":
+            code = cmd_status(connection, args)
+        elif args.command == "query":
+            code = cmd_query(connection, args)
+        elif args.command == "files":
+            code = cmd_files(connection, args)
+        elif args.command == "triggers":
+            code = cmd_triggers(connection, args)
+        elif args.command == "trigger-add":
+            code = cmd_trigger_edit(connection, args, add=True)
+        elif args.command == "trigger-rm":
+            code = cmd_trigger_edit(connection, args, add=False)
+        elif args.command == "unretire":
+            code = cmd_unretire(connection, args)
+        elif args.command == "card-status":
+            code = cmd_card_status(connection, args)
+        elif args.command == "hidden":
+            code = cmd_hidden(connection, args)
+        elif args.command == "retired":
+            code = cmd_retired(connection, args)
+        elif args.command == "retire":
+            code = cmd_retire(connection, args)
+        elif args.command == "tier-set":
+            code = cmd_tier_set(connection, args)
+        elif args.command == "pin":
+            code = cmd_pin(connection, args)
+        elif args.command == "unpin":
+            code = cmd_unpin(connection, args)
+        elif args.command == "cards":
+            code = cmd_cards(connection, args)
+        elif args.command == "meta":
+            code = cmd_meta(connection, args)
+        else:
+            code = cmd_frontmatter_export(connection, args)
+    finally:
+        connection.close()
+    sys.exit(code)
+
+
+if __name__ == "__main__":
+    main()

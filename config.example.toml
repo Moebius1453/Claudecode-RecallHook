@@ -1,0 +1,62 @@
+[db]
+path = "data/mem.db"
+
+[[corpus]]
+label = "memory"
+path = "memory"
+priority = 10
+enabled = true
+
+[[corpus]]
+label = "notes"
+path = "notes"
+priority = 20
+enabled = false
+
+[embed]
+endpoint = "http://127.0.0.1:8765"
+model = "bge-small-zh-v1.5"
+dim = 512
+timeout_s = 2.0
+batch_timeout_s = 30.0
+batch = 16
+
+[llama]
+endpoint = "http://127.0.0.1:8080"
+
+[services]
+llama_server = "llama-server.exe"
+embed_model = "models/bge-small-zh-v1.5/bge-small-zh-v1.5-f16.gguf"
+qwen_model = "models/Qwen3-8B-IQ4_XS.gguf"
+
+[capture]
+include_sidechain = false
+max_text_chars = 8000
+
+[screen]
+batch_turns = 12
+batch_max_chars = 6000
+max_retries = 3
+dedup_method = "vector"
+dedup_vector_threshold = 0.68
+dedup_topic_threshold = 0.30
+dedup_full_threshold = 0.10
+
+[retrieval]
+order = ["trigger", "ngram", "vector"]
+rrf_k = 60
+weight_trigger = 1.0
+weight_ngram = 0.8
+weight_vector = 0.6
+ngram_n = 2
+ngram_threshold = 0.5
+fts_gram = 3
+fts_max_grams = 40
+fts_limit = 20
+vector_topk = 10
+vector_threshold = 0.55
+tfidf_fallback = true
+tfidf_threshold = 0.09
+
+[corpus_options]
+skip_names = ["README.md", "MEMORY.md"]
